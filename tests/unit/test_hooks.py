@@ -131,7 +131,7 @@ def test_handler_errors_name_the_full_location():
     ],
 )
 def test_handler_blocks_cannot_have_when_or_handlers(handler):
-    with pytest.raises(ValidationError, match="handler blocks cannot set when or handlers"):
+    with pytest.raises(ValidationError, match="cannot set when, status, or handlers"):
         Stage("s", [Shell(script="true")], finally_=[handler])
 
 

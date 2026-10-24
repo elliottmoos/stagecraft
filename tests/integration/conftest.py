@@ -45,14 +45,20 @@ class Argo:
         run(*self.argo, "wait", workflow, timeout=300, check=False)
         return self.get(workflow)
 
-    def wait_for_running_pod(self, workflow: str, timeout: float = 120) -> None:
+    def wait_for_running_pod(
+        self, workflow: str, name: str | None = None, timeout: float = 120
+    ) -> None:
+        """Wait until a pod node (with display name `name`, if given) is running."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             nodes = self.get(workflow).get("status", {}).get("nodes", {}).values()
-            if any(n["type"] == "Pod" and n["phase"] == "Running" for n in nodes):
+            if any(
+                n["type"] == "Pod" and n["phase"] == "Running" and name in (None, n["displayName"])
+                for n in nodes
+            ):
                 return
             time.sleep(1)
-        raise AssertionError(f"{workflow} has no running pod after {timeout}s")
+        raise AssertionError(f"{workflow} has no running pod {name or ''} after {timeout}s")
 
     def stop(self, workflow: str) -> None:
         run(*self.argo, "stop", workflow)

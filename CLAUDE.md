@@ -47,6 +47,14 @@ Facts confirmed by experiment or by `tests/integration`. Re-check them when bump
 - A task skipped by `when` fires none of its handlers.
 - `when` parses bare words: `true == 'true'` is false (boolean vs string). Stagecraft quotes
   param placeholders inside `when`.
+- `running` hooks are unreliable: one on an 8-second block never fired (it did on a 60-second
+  one). Don't use them for anything that must happen.
+- `exit` hooks don't fire for a task skipped by `when`.
+- `continueOn` is rejected by `argo lint` in any DAG template that uses `depends`.
+- A failed task counts as handled (the DAG can still succeed) only if a task depending on its
+  failure actually runs.
+- `argo stop` doesn't run the `exit` hook of a block that was running (the stage's still runs).
+  A block-level commit status stays pending after a stop until the workflow is re-run.
 - `argo stop` runs exit handlers with `{{workflow.status}} == Failed`.
 - `argo terminate` runs **no** exit handlers, so a terminated run can leave commit statuses
   pending. Accepted: builds are rarely terminated, and re-running the workflow updates the

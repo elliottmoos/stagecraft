@@ -119,7 +119,7 @@ A block is a unit with a typed contract. The framework's job is to map each cont
 | Resources, retry, timeout, service account, node selection | Template fields, whose values come from Helm values |
 | `when` (stage or block) | `when` on the task |
 | `on_failure`, `on_success`, `finally_` | One task-level `exit` hook calling a generated handler DAG, whose tasks are guarded by `when` on the step's status |
-| `status="ctx/name"` | `running` and `exit` hooks that report pending, then success or failure |
+| `status="ctx/name"` | A "pending" report task the step depends on, then the final state from the step's `exit` hook (pipeline: `onExit`), all through the pipeline's `status_reporter` block |
 | Pipeline `on_success` / `on_failure` | Generated `onExit` template branching on `{{workflow.status}}` |
 | Triggers | `CronWorkflow` |
 | Params | Workflow `arguments.parameters` |
@@ -135,7 +135,13 @@ Handler failures: a failing pipeline handler fails the pipeline (Argo's `onExit`
 
 **Hooks.** Prefer task-level hooks over template-level hooks (template-level fires everywhere the template is used), and prefer hooks over sibling tasks with `depends: X.Failed`. Such a sibling marks the failure as handled, so the stage and the workflow succeed despite the failed step (verified on Argo 4.1.6). Use the `exit` hook rather than expression hooks: an expression hook on a sub-DAG (stage) task never fires when another task depends on it, while the `exit` hook always fires and can pass `{{tasks.<name>.status}}` to its template. A step's handlers therefore run from one `exit` hook that calls a handler DAG branching on status, the same shape as the pipeline's `onExit`. A step skipped by `when` runs no handlers.
 
-**Commit statuses.** `status=` expands into two hooks (`running` posts pending, `exit` maps node status to success, failure, or error). Requirements: `sha` and `repo` are params available before any clone, statuses are best-effort and must not fail the build, context names are validated as unique per pipeline, and skipped or cancelled nodes must never leave a required check stuck pending. How skipped nodes are represented is an open decision.
+**Commit statuses.** Requirements: `sha` and `repo` are params available before any clone, statuses are best-effort and must not fail the build, context names are validated as unique per pipeline, and skipped or cancelled nodes must never leave a required check stuck pending.
+
+The API call is made by the pipeline's `status_reporter`, an ordinary block owned by the consumer or a block library (stagecraft stays host-agnostic). It reads `{{ status.context }}`, `{{ status.state }}`, and `{{ status.description }}`, and gets the commit from the `repo` and `sha` params. It is compiled once and called through a generated `status-report` DAG that runs it with `continueOn`, so a report can never fail the build.
+
+For each step with `status=`: a "pending" report task shares the step's `depends` and `when`, and the step depends on it, so pending always lands before the final state. (A `running` hook was tried: it can miss short steps on Argo 4.1.6, and a late pending would overwrite the final state.) The step's `exit` hook reports success, failure, or error. A step skipped by `when` gets a "success" report with the description "Skipped" from a sibling task with the negated condition, so a required check for a conditional stage still passes. A step that never starts because an earlier stage failed is never reported, so nothing is left pending. The pipeline's own context reports pending at start and its final state from `onExit`.
+
+Accepted gaps: `argo terminate` runs no exit handlers, and `argo stop` skips the exit hook of a block that was running. Either can leave a context pending; re-running the workflow updates it.
 
 **Workspace strategies.** Constraint: the current workspace is an EBS-backed PVC (ReadWriteOnce), which limits true cross-node parallelism. Blocks declare their workspace access, and the strategy is a compile-time choice made in the pipeline definition (`workspace=Workspace(strategy=..., size=...)`), either stated explicitly or inferred from block declarations with an explicit override. The strategy consumes no Helm values and nothing from the `CompileContext`: each rendered manifest has exactly one shape, visible in the pipeline file and the diff.
 
@@ -254,7 +260,6 @@ Do not generalize before two or three real pipelines exist.
 - Whether the workspace strategy is always stated explicitly in the pipeline or inferred from block declarations with an override.
 - Handling of optional values in the contract: required-only references, guards, or defaults declared by the block.
 - Commit rendered templates into the chart repo, or publish them as a build artifact.
-- Representation of skipped stages in commit statuses.
 - Template naming across multiple releases in one namespace versus stable names in the Argo UI.
 - Whether a reference block library belongs in a third package.
 - Whether to offer a resolved preview mode (render with a values file) for local debugging, or rely on `helm template`.

@@ -78,13 +78,21 @@ class _Step(_Model):
 
     Handlers are ordinary blocks run from the step's Argo `exit` hook. `on_success` runs when the
     step succeeds, `on_failure` when it fails or errors, `finally_` in both cases; none run when
-    `when` skips the step. In handlers, `{{ step.name }}` is the step's path ("stage" or
+    `when` skips the step.
+
+    `status` is a commit-status context (for example "ci/unit-tests"). The pipeline's
+    status_reporter posts "pending" just before the step starts, then "success", "failure", or
+    "error" when it finishes, or "success" with the description "Skipped" when `when` skips it.
+    Reporting is best-effort and never fails the pipeline.
+
+    In handlers, `{{ step.name }}` is the step's path ("stage" or
     "stage/block") and `{{ step.status }}` is "Succeeded" or "Failed". A failing handler is shown
     in the Argo UI but, unlike a pipeline-level handler, does not fail the pipeline (an Argo
     limitation).
     """
 
     when: str | None = None
+    status: str | None = None
     on_success: list["Block"] = []
     on_failure: list["Block"] = []
     finally_: list["Block"] = []
@@ -152,11 +160,17 @@ def _check_handlers(where: str, owner: BaseModel, fields: tuple[str, ...]) -> No
         handlers: list[Block] = getattr(owner, field)
         _check_block_names(f"{where} {field}", handlers)
         for handler in handlers:
-            if handler.when is not None or any(getattr(handler, f) for f in HANDLER_FIELDS):
+            if not _is_plain(handler):
                 raise ValueError(
                     f"{where} {field}: block {handler.block_name!r}: "
-                    "handler blocks cannot set when or handlers"
+                    "handler blocks cannot set when, status, or handlers"
                 )
+
+
+def _is_plain(block: Block) -> bool:
+    """True if the block sets no step features: it only runs (handlers, the status reporter)."""
+    has_handlers = any(getattr(block, f) for f in HANDLER_FIELDS)
+    return block.when is None and block.status is None and not has_handlers
 
 
 class Pipeline(_Model):
@@ -165,6 +179,11 @@ class Pipeline(_Model):
     `on_success` and `on_failure` blocks run in parallel after the pipeline finishes, depending
     on its result. They can use `{{ step.name }}` and `{{ step.status }}`, which refer to the
     workflow. A failing handler fails the pipeline.
+
+    `status` contexts (on the pipeline, stages, and blocks) are posted by `status_reporter`, an
+    ordinary block that makes the API call. It reads `{{ status.context }}`, `{{ status.state }}`
+    ("pending", "success", "failure", "error"), and `{{ status.description }}`, and the commit
+    from the required `repo` and `sha` params.
     """
 
     name: Name
@@ -172,6 +191,14 @@ class Pipeline(_Model):
     stages: Annotated[list[Stage], Field(min_length=1)]
     on_success: list[Block] = []
     on_failure: list[Block] = []
+    status: str | None = None
+    status_reporter: Block | None = None
+
+    @property
+    def status_contexts(self) -> list[str]:
+        """Every commit-status context, in pipeline order."""
+        steps = [step for stage in self.stages for step in (stage, *stage.blocks)]
+        return [s.status for s in (self, *steps) if s.status is not None]
 
     @model_validator(mode="after")
     def _check_unique_names(self) -> Self:
@@ -180,4 +207,25 @@ class Pipeline(_Model):
         if dupes := _duplicates([p.name for p in self.params]):
             raise ValueError(f"pipeline {self.name!r}: duplicate param name {dupes[0]!r}")
         _check_handlers(f"pipeline {self.name!r}", self, ("on_success", "on_failure"))
+        return self
+
+    @model_validator(mode="after")
+    def _check_statuses(self) -> Self:
+        contexts = self.status_contexts
+        if dupes := _duplicates(contexts):
+            raise ValueError(f"pipeline {self.name!r}: duplicate status context {dupes[0]!r}")
+        if not contexts:
+            return self
+        if self.status_reporter is None:
+            raise ValueError(f"pipeline {self.name!r}: status contexts need a status_reporter")
+        if not _is_plain(self.status_reporter):
+            raise ValueError(
+                f"pipeline {self.name!r}: the status_reporter cannot set when, status, or handlers"
+            )
+        required = {p.name for p in self.params if p.required}
+        if not {"repo", "sha"} <= required:
+            raise ValueError(
+                f"pipeline {self.name!r}: status contexts need required params 'repo' and 'sha' "
+                "(the commit to report on)"
+            )
         return self

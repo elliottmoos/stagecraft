@@ -29,7 +29,7 @@ def test_values_placeholders_fail_until_contract_validation_exists():
 def test_step_placeholders_lower_to_the_given_step_context():
     step = {"name": "{{workflow.name}}", "status": "{{workflow.status}}"}
 
-    assert lower("{{ step.name }} is {{ step.status }}", params=set(), step=step) == (
+    assert lower("{{ step.name }} is {{ step.status }}", params=set(), scopes={"step": step}) == (
         "{{workflow.name}} is {{workflow.status}}"
     )
 
