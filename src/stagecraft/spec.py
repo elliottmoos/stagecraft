@@ -95,23 +95,34 @@ class Stage(_Model):
 
     @model_validator(mode="after")
     def _check_block_names(self) -> Self:
-        names = [b.block_name for b in self.blocks]
-        for name in names:
-            _check_name(name)
-        if dupes := _duplicates(names):
-            raise ValueError(
-                f"stage {self.name!r}: duplicate block name {dupes[0]!r}; "
-                "give blocks of the same type a distinct name="
-            )
+        _check_block_names(f"stage {self.name!r}", self.blocks)
         return self
 
 
+def _check_block_names(where: str, blocks: list[Block]) -> None:
+    names = [b.block_name for b in blocks]
+    for name in names:
+        _check_name(name)
+    if dupes := _duplicates(names):
+        raise ValueError(
+            f"{where}: duplicate block name {dupes[0]!r}; "
+            "give blocks of the same type a distinct name="
+        )
+
+
 class Pipeline(_Model):
-    """A pipeline: ordered stages of parallel blocks, compiled to one WorkflowTemplate."""
+    """A pipeline: ordered stages of parallel blocks, compiled to one WorkflowTemplate.
+
+    `on_success` and `on_failure` blocks run in parallel after the pipeline finishes, depending
+    on its result. They can use `{{ step.name }}` and `{{ step.status }}`, which refer to the
+    workflow. A failing handler fails the pipeline.
+    """
 
     name: Name
     params: list[Param] = []
     stages: Annotated[list[Stage], Field(min_length=1)]
+    on_success: list[Block] = []
+    on_failure: list[Block] = []
 
     @model_validator(mode="after")
     def _check_unique_names(self) -> Self:
@@ -119,4 +130,6 @@ class Pipeline(_Model):
             raise ValueError(f"pipeline {self.name!r}: duplicate stage name {dupes[0]!r}")
         if dupes := _duplicates([p.name for p in self.params]):
             raise ValueError(f"pipeline {self.name!r}: duplicate param name {dupes[0]!r}")
+        _check_block_names(f"pipeline {self.name!r} on_success", self.on_success)
+        _check_block_names(f"pipeline {self.name!r} on_failure", self.on_failure)
         return self

@@ -21,10 +21,22 @@ def test_undeclared_param_fails():
         lower("{{ param.nope }}", params={"repo"})
 
 
-@pytest.mark.parametrize("text", ["{{ values.notify.channel }}", "{{ step.status }}"])
-def test_placeholders_from_later_slices_fail_instead_of_passing_through(text):
+def test_values_placeholders_fail_until_contract_validation_exists():
     with pytest.raises(CompileError, match="not supported yet"):
-        lower(text, params=set())
+        lower("{{ values.notify.channel }}", params=set())
+
+
+def test_step_placeholders_lower_to_the_given_step_context():
+    step = {"name": "{{workflow.name}}", "status": "{{workflow.status}}"}
+
+    assert lower("{{ step.name }} is {{ step.status }}", params=set(), step=step) == (
+        "{{workflow.name}} is {{workflow.status}}"
+    )
+
+
+def test_step_placeholders_need_a_step_context():
+    with pytest.raises(CompileError, match="only available in handler blocks"):
+        lower("{{ step.status }}", params=set())
 
 
 def test_native_argo_expressions_pass_through():

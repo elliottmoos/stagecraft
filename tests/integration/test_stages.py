@@ -7,8 +7,8 @@ from support import nodes_by_name
 pytestmark = pytest.mark.integration
 
 
-def test_stages_run_in_order_and_blocks_in_a_stage_run_in_parallel(install_and_submit):
-    workflow = install_and_submit([smoke.pipeline], "smoke-ci", {"repo": "example/repo"})
+def test_stages_run_in_order_and_blocks_in_a_stage_run_in_parallel(argo):
+    workflow = argo.run(smoke.pipeline, {"repo": "example/repo"})
 
     assert workflow["status"]["phase"] == "Succeeded"
     nodes = nodes_by_name(workflow)

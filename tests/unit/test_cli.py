@@ -39,7 +39,11 @@ def test_render_accepts_a_directory(tmp_path):
     result = CliRunner().invoke(app, ["render", "fixtures/pipelines", "--out", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["escaping.yaml", "smoke-ci.yaml"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "escaping.yaml",
+        "handlers-ci.yaml",
+        "smoke-ci.yaml",
+    ]
 
 
 def test_render_writes_nothing_when_any_pipeline_fails(tmp_path):

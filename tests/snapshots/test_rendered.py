@@ -6,10 +6,10 @@ from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 from stagecraft.compile import compile_pipeline
 from stagecraft.serialize import serialize
 
-from fixtures.pipelines import escaping, smoke
+from fixtures.pipelines import escaping, handlers, smoke
 from support import CRD_SCHEMAS, build_chart, helm_template, require_tool, run
 
-PIPELINES = [smoke.pipeline, escaping.pipeline]
+PIPELINES = [smoke.pipeline, escaping.pipeline, handlers.pipeline]
 
 
 class YAMLSnapshot(SingleFileSnapshotExtension):

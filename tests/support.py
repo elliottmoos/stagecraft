@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -54,3 +55,8 @@ def helm_template(chart: Path, out: Path) -> list[dict]:
 def nodes_by_name(workflow: dict) -> dict[str, dict]:
     """Workflow nodes keyed by display name (stage or block name)."""
     return {n["displayName"]: n for n in workflow["status"]["nodes"].values()}
+
+
+def unique_name(prefix: str) -> str:
+    """A resource name that won't clash with earlier runs on the same cluster."""
+    return f"{prefix}-{uuid.uuid4().hex[:6]}"

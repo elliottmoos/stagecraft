@@ -28,6 +28,20 @@ Hera pitfalls found so far:
 - The compiler builds Hera objects explicitly (`DAG(tasks=[...])`, `WorkflowTemplate(templates=[...])`)
   and never uses Hera's `with` contexts, which keep module-level state.
 
+## Verified Argo behavior (4.1.6, on kind)
+
+Facts confirmed by experiment or by `tests/integration`. Re-check them when bumping Argo.
+
+- Every DAG task field except `depends`/`dependencies` also exists on steps. Stagecraft uses DAGs
+  because steps add unlabelled `[0]` group nodes to the UI graph and rule out non-barrier edges.
+- A failing `onExit` task turns a Succeeded workflow into Failed. Stagecraft keeps that default
+  on purpose: handler failures are unexpected and should fail the build. (`continueOn` would
+  keep the result while still showing the handler as Failed.)
+- `argo stop` runs exit handlers with `{{workflow.status}} == Failed`.
+- `argo terminate` runs **no** exit handlers, so a terminated run can leave commit statuses
+  pending. Accepted: builds are rarely terminated, and re-running the workflow updates the
+  statuses. Don't add machinery for this case.
+
 ## Commands
 
 ```sh
