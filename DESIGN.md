@@ -110,7 +110,7 @@ A block is a unit with a typed contract. The framework's job is to map each cont
 
 | Block feature | Argo mechanism |
 |---|---|
-| Typed inputs / outputs | Template `inputs` / `outputs` parameters and artifacts |
+| Typed inputs / outputs (deferred, section 15) | Template `inputs` / `outputs` parameters and artifacts |
 | `workspace`: `none`, `read`, `write` | Volume mounts, `containerSet` grouping, or artifact transfer (section 7) |
 | Declared value references (path and expected type) | Helm expressions, validated against the chart's values contract |
 | Secret references | `secretKeyRef` env or volume; secret names come from Helm values, never secret contents |
@@ -121,7 +121,7 @@ A block is a unit with a typed contract. The framework's job is to map each cont
 | Pipeline `on_success` / `on_failure` | Generated `onExit` template branching on `{{workflow.status}}` |
 | Triggers | A `CronWorkflow` per trigger, `workflowTemplateRef` to the pipeline's template, in the pipeline's file |
 | Params | Workflow `arguments.parameters` |
-| Escape hatch (raw Hera template wrapped in a minimal contract) | Passed through unchanged |
+| Escape hatch (raw Hera template wrapped in a minimal contract; deferred, section 15) | Passed through unchanged |
 
 Handler blocks (`on_success`, `on_failure`, `finally_`) are ordinary blocks with the same contract. They receive context through `{{ step.name }}` and `{{ step.status }}`. In stage and block handlers these are fixed at compile time per outcome (`Succeeded` or `Failed`, with Argo's Error reported as Failed); in pipeline handlers they are the workflow's name and status. Argo exposes no exit code or failure message to task hooks. Handler blocks cannot have their own `when` or handlers.
 
@@ -200,9 +200,9 @@ Decided: references must be **required** at every level of the schema and non-nu
 ## 9. Testing strategy
 
 1. **Unit**: plain Python functions, escaping, and contract-validation logic.
-2. **Block contract**: a compiled block exposes exactly its declared inputs, outputs, and artifacts, and references only the value paths and types it declares.
+2. **Block contract**: a compiled block exposes exactly its declared inputs, outputs, and artifacts, and references only the value paths and types it declares. (Waits for typed inputs and outputs, section 15. Today blocks request values inside `compile` rather than declaring them up front, and every request is checked against the contract.)
 3. **Contract validation**: with a fixture schema, assert that a missing path, a wrong type, and an unhandled optional value each fail rendering with a clear error, and that a valid reference renders.
-4. **Composition**: each step's required inputs are produced by an earlier stage, status contexts are unique, and parallel `write` paths do not overlap.
+4. **Composition**: each step's required inputs are produced by an earlier stage, status contexts are unique, and parallel `write` paths do not overlap. (Status contexts and workspace writers are checked; inputs and `paths` are deferred, section 15.)
 5. **Compile and snapshot**: assert structure (dependencies, hooks, `onExit`, resources) and snapshot the rendered templates so every change appears in review.
 6. **Static validation**: run `helm template` against a **test-only fixture chart** (with fixture values and schema) inside the stagecraft repo, then `argo lint` and kubeconform on the result. Include escaping tests for Argo expressions in scripts, `when`, and `depends`. The fixture chart is never published.
 7. **Behavior** (kind or k3d with Argo installed, small and slow): a `run_block` fixture wraps a block in a one-step workflow, installs the fixture chart, submits it, and asserts on phase and outputs. Separate tests deliberately fail and pass steps to prove hooks, `onExit`, and status sequences fire correctly, including skipped and cancelled cases.
@@ -239,8 +239,9 @@ stagecraft/
 7. Workspace strategies (`containerset` first).
 8. Helm escaping and `toYaml` handling hardened with tests.
 9. CLI polish (`check`, `graph`, `contexts`) and docs.
+10. Triggers: `Trigger.cron` compiled to `CronWorkflow` (added after the original plan, which had left it out).
 
-Do not generalize before two or three real pipelines exist.
+Section 15 lists what was deliberately left out. Do not generalize before two or three real pipelines exist.
 
 ## 12. `CLAUDE.md` contents
 
@@ -272,3 +273,25 @@ Do not generalize before two or three real pipelines exist.
 - Template naming across multiple releases in one namespace versus stable names in the Argo UI.
 - Whether a reference block library belongs in a third package.
 - Whether to offer a resolved preview mode (render with a values file) for local debugging, or rely on `helm template`.
+
+## 15. Deferred features
+
+Left out on purpose, as of slice 10 (2026-10-24). Each waits for a real pipeline that needs it ("do not generalize before two or three real pipelines exist"). The pipeline file or render error that would need it is the signal to pick one up.
+
+| Feature | Why deferred | Revisit when |
+|---|---|---|
+| Typed block inputs and outputs (template parameters and artifacts passed between steps), with the composition check that inputs come from an earlier stage and the declared-contract block test | No pipeline passes data between steps except through the workspace | A step needs another step's output that the workspace can't carry |
+| Escape hatch: a raw Hera template wrapped in a minimal contract (section 6) | Every fixture need was met by ordinary blocks | A block can't be expressed as one `Container` or `Script` |
+| Structured values: objects and arrays from Helm values (section 8) | Hera validates object and list fields, so a reference could only get there through placeholder workarounds and patching the output. Scalar references inside a block-built object already work | The chart must own the whole shape of a field, such as `tolerations`, `affinity`, or `resources` |
+| Values in non-string fields: integer or boolean fields such as `suspend` or a pure-int Kubernetes field | Value references are strings, and always render as strings | A block or trigger needs a Helm value in such a field (see per-installation trigger switch) |
+| `node-affinity` workspace strategy (section 7) | `containerset` covers parallel readers | Blocks that share the workspace need their own pods, for example for per-block `when`, `status`, or handlers, or for `Script` templates |
+| `artifact` workspace strategy (section 7) | Needs an artifact repository; `containerset` covers current needs | Stages must run on different nodes, or the workspace is too big for one volume |
+| Parallel workspace writers, with declared `paths` and an overlap check (section 7) | A writer must be its stage's only workspace block | Two blocks must write the workspace in the same stage |
+| Workspace access for handlers and the status reporter (section 7) | Unverified whether a step's exit hook finishes before the next stage mounts the volume | A handler must read the workspace (for example, uploading test reports); prove the ordering on kind first |
+| Per-installation trigger switch (`suspend` from Helm values) | A boolean field, so it waits for values in non-string fields | An environment must not run a pipeline's schedule |
+| Trigger options: `concurrencyPolicy`, history limits, `startingDeadlineSeconds`, several schedules in one trigger | Argo's defaults are fine; several schedules are several triggers | A schedule overlaps its own runs, or history needs tuning |
+| Resolving a branch's latest commit for scheduled runs | A trigger can only pass literal params, so a scheduled run's `sha` is literal and its commit status may fail to post (best-effort) | Scheduled runs need commit statuses |
+| Multi-line scripts containing a string value as readable literal blocks (section 8) | Kept as double-quoted one-liners: correct for any value, but harder to read in diffs | Rendered templates are reviewed often enough for this to hurt |
+
+Accepted gaps (Argo or Helm behavior, not missing features) are kept with the mechanisms they affect in section 7: `argo terminate` and `argo stop` leaving statuses pending, stage and block handler failures not failing the pipeline, and new CronWorkflows missing their first ticks. Still unverified: an upgrade that changes a trigger's params together with its template's params (Helm updates the cron first, while the old template is still in place).
+

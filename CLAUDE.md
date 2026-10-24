@@ -136,7 +136,8 @@ that way so tests never touch the user's current kube context.
 - A workspace writer is its stage's only workspace block, so containerSet groups are all readers.
   Handlers and the status reporter can't use the workspace yet (decided 2026-10-24).
 - Hera's API changes between versions, so check the pinned version's docs rather than guessing.
-- Don't generalize before two or three real pipelines exist.
+- Don't generalize before two or three real pipelines exist. `DESIGN.md` section 15 lists the
+  deferred features and what would justify each; update it when one is built or newly deferred.
 
 ## Workflow
 
