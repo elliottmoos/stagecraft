@@ -1,0 +1,116 @@
+# 9. Triggers
+
+Some runs should happen on a schedule: a nightly build of the main branch, a weekly dependency
+check. A **trigger** runs the pipeline on a schedule.
+
+## Declaring a trigger
+
+```python
+Trigger.cron("0 2 * * *", name="nightly", params={"repo": "example/service", "sha": "main"})
+```
+
+- **The schedule** is a five-field cron expression (`minute hour day month weekday`) or a macro:
+  `@hourly`, `@daily` (or `@midnight`), `@weekly`, `@monthly`, `@yearly` (or `@annually`),
+  `@every 6h`. It's checked at render time.
+- **`timezone`** is an IANA name such as `"Europe/Amsterdam"`. Without it, the schedule uses the
+  workflow controller's time zone.
+- **`params`** are the run's params. Every required param must be set, every key must be a
+  declared param, and values must be in the param's `enum`. Values may use
+  `{{ values.a.b }}`, for example to build a branch set per installation.
+- **`name`** defaults to `cron`; each trigger in a pipeline needs a distinct name.
+
+## What it compiles to
+
+Each trigger becomes an Argo `CronWorkflow` named `<pipeline>-<name>`, written into the
+pipeline's file after its `WorkflowTemplate`. It doesn't copy the pipeline: it refers to the
+template by name and supplies the params, so scheduled runs are exactly the pipeline you
+reviewed. They appear in the Argo UI like any other run, started by the cron workflow.
+
+Argo limits `CronWorkflow` names to 52 characters, so `<pipeline>-<name>` must fit; the render
+fails otherwise.
+
+## Growing the example
+
+A nightly build of `main`:
+
+```python file=pipelines/service_ci.py
+from stagecraft.spec import Param, Pipeline, Stage, Trigger, Workspace
+
+from blocks import Clone, GitHubStatus, Make, Notify
+
+pipeline = Pipeline(
+    name="service-ci",
+    params=[
+        Param("repo", required=True, description="Repository, as owner/name"),
+        Param("sha", required=True, description="Commit to build"),
+        Param("push", default="false", enum=["true", "false"], description="Push the image"),
+        Param("deploy", default="false", enum=["true", "false"], description="Deploy to staging"),
+    ],
+    status="ci/pipeline",
+    status_reporter=GitHubStatus(),
+    workspace=Workspace(strategy="containerset", size="5Gi"),
+    stages=[
+        Stage("prepare", [Clone()]),
+        Stage(
+            "verify",
+            [
+                Make(name="lint", target="lint", workspace="read"),
+                Make(name="unit-tests", target="test", workspace="read"),
+            ],
+            status="ci/verify",
+            on_failure=[Notify(message="{{ step.name }} failed for {{ param.sha }}")],
+        ),
+        Stage(
+            "package",
+            [
+                Make(
+                    name="image",
+                    target="image",
+                    variables={"PUSH": "{{ param.push }}"},
+                    workspace="read",
+                ),
+            ],
+            status="ci/package",
+        ),
+        Stage(
+            "deploy",
+            [Make(name="staging", target="deploy-staging", workspace="read")],
+            when="{{ param.deploy }} == 'true'",
+            status="ci/deploy",
+        ),
+    ],
+    on_failure=[Notify(message="{{ step.name }} ended {{ step.status }}")],
+    triggers=[
+        Trigger.cron(
+            "0 2 * * *",
+            name="nightly",
+            timezone="Europe/Amsterdam",
+            params={"repo": "example/service", "sha": "main"},
+        ),
+    ],
+)
+```
+
+This renders a `CronWorkflow` named `service-ci-nightly`. `Clone` happily fetches a branch name,
+so the nightly run builds the head of `main`.
+
+## Things to know
+
+- **A schedule has no commit.** Params are literal, so `sha` is `main` here, not a commit SHA.
+  GitHub's status API needs a SHA, so this run's statuses will fail to post. That's harmless
+  (reporting is best-effort) but worth knowing.
+- **The first ticks after an install can be missed.** Helm creates a release's `CronWorkflow`s
+  before its `WorkflowTemplate`s, and Argo marks a cron whose template doesn't exist yet as
+  invalid until it checks again, a few minutes later (at most 20). This only affects a brand-new
+  trigger or pipeline; Kubernetes resources are eventually consistent anyway.
+- **A trigger can't be switched off per installation yet.** Every environment that installs the
+  chart runs the schedule.
+- **One schedule per trigger.** For two schedules, add two triggers.
+
+## Recap
+
+- `Trigger.cron(schedule, name=, params=, timezone=)` runs the pipeline on a schedule.
+- It compiles to a `CronWorkflow` that refers to the pipeline's template, in the same file.
+- Required params must be set; values may come from Helm values.
+
+Next: [10. Shipping pipelines](10-shipping.md).

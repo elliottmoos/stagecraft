@@ -14,6 +14,9 @@ pipelines (Python) ──stagecraft render──▶ chart/templates/*.yaml ─�
 Pinned targets: Hera 7.1.0, Argo Workflows 4.1.6, Helm 4, Python 3.12+. The design rationale is in
 [DESIGN.md](DESIGN.md).
 
+**New to Stagecraft? Start with the guide in [docs/](docs/README.md)**: eleven short chapters
+that build one pipeline from scratch, layer by layer. This page is the quick overview.
+
 ## A pipelines repo
 
 A pipelines repo is a plain Python project that depends on a pinned stagecraft release and holds

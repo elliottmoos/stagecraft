@@ -3,8 +3,9 @@
 Python framework and CLI that compiles CI/CD pipelines (ordered stages of parallel blocks) into
 Helm-compatible Argo Workflows `WorkflowTemplate` and `CronWorkflow` manifests, using Hera as the
 compiler. `DESIGN.md` is the spec; read the relevant section before changing behavior.
-`README.md` is the user guide; keep it in step with behavior changes (`tests/unit/test_readme.py`
-compiles its examples).
+`README.md` is the overview and `docs/` the step-by-step guide (`docs/reference.md` lists every
+field); keep both in step with behavior changes. `tests/unit/test_readme.py` and
+`tests/snapshots/test_docs.py` compile their examples (fences tagged `file=<path>` in `docs/`).
 
 ## Pinned versions
 
@@ -155,6 +156,7 @@ tests/contract/     block contract and values-contract validation
 tests/snapshots/    compile + rendered-template snapshots
 tests/integration/  kind + Argo behavior tests (marked `integration`)
 tests/fixtures/     minimal blocks, fixture schema, test-only fixture chart, CRD schemas
+docs/               user guide: numbered chapters (one cumulative example project) + reference
 ```
 
 Modules are added when a slice needs them, not ahead of time.
