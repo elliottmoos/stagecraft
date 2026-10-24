@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from stagecraft.compile import compile_pipeline
+from stagecraft.compile import compile_pipeline, compile_triggers
 from stagecraft.context import CompileContext
 from stagecraft.contract import ValuesContract
 from stagecraft.loader import load_pipelines
@@ -29,7 +29,8 @@ def string(*path: str) -> dict:
 
 
 def test_readme_examples_compile(tmp_path, monkeypatch):
-    blocks, pipeline = re.findall(r"```python\n(.*?)```", README.read_text(), re.S)
+    # The first two examples are the blocks module and a pipeline file.
+    blocks, pipeline, *_ = re.findall(r"```python\n(.*?)```", README.read_text(), re.S)
     (tmp_path / "blocks.py").write_text(blocks)
     (tmp_path / "service_ci.py").write_text(pipeline)
     monkeypatch.chdir(tmp_path)
@@ -38,5 +39,6 @@ def test_readme_examples_compile(tmp_path, monkeypatch):
 
     [loaded] = load_pipelines([tmp_path / "service_ci.py"])
 
+    ctx = CompileContext(ValuesContract(schema))
     assert loaded.name == "service-ci"
-    assert serialize(compile_pipeline(loaded, CompileContext(ValuesContract(schema))))
+    assert serialize(compile_pipeline(loaded, ctx), *compile_triggers(loaded, ctx))

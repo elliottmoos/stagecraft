@@ -3,15 +3,14 @@
 import pytest
 from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 
-from stagecraft.compile import compile_pipeline
 from stagecraft.serialize import serialize
 
-from fixtures.contract import CONTEXT
-from fixtures.pipelines import escaping, handlers, hooks, smoke, status, workspace
+from fixtures.pipelines import escaping, handlers, hooks, smoke, status, triggers, workspace
 from support import (
     CRD_SCHEMAS,
     build_chart,
     helm_template,
+    manifests,
     require_tool,
     run,
     with_fixture_values,
@@ -23,6 +22,7 @@ PIPELINES = [
     handlers.pipeline,
     hooks.pipeline,
     status.pipeline,
+    triggers.pipeline,
     workspace.pipeline,
 ]
 
@@ -46,13 +46,19 @@ def helm_output(pipeline, tmp_path):
 
 
 def test_rendered_template_matches_snapshot(pipeline, snapshot):
-    assert serialize(compile_pipeline(pipeline, CONTEXT)) == snapshot(extension_class=YAMLSnapshot)
+    assert serialize(*manifests(pipeline)) == snapshot(extension_class=YAMLSnapshot)
 
 
 def test_helm_template_reproduces_the_compiled_manifest(pipeline, helm_output):
     _, docs = helm_output
 
-    assert docs == [with_fixture_values(compile_pipeline(pipeline, CONTEXT).to_dict())]
+    # Helm orders documents by kind when it renders (CronWorkflow before WorkflowTemplate).
+    expected = [with_fixture_values(m.to_dict()) for m in manifests(pipeline)]
+    assert sorted(docs, key=_identity) == sorted(expected, key=_identity)
+
+
+def _identity(doc: dict) -> tuple[str, str]:
+    return doc["kind"], doc["metadata"]["name"]
 
 
 def test_argo_lint_accepts_helm_output(helm_output):

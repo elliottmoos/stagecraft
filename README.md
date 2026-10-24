@@ -1,7 +1,8 @@
 # Stagecraft
 
 Stagecraft compiles CI/CD pipelines, written in Python as ordered **stages** of parallel
-**blocks**, into Argo Workflows `WorkflowTemplate` manifests that a Helm chart can ship. You keep
+**blocks**, into Argo Workflows `WorkflowTemplate` (and, for schedules, `CronWorkflow`)
+manifests that a Helm chart can ship. You keep
 triggering and watching runs in the Argo Workflows UI; Stagecraft only writes templates.
 
 ```
@@ -108,7 +109,7 @@ Rules for blocks:
 ## Pipelines
 
 ```python
-from stagecraft.spec import Param, Pipeline, Stage, Workspace
+from stagecraft.spec import Param, Pipeline, Stage, Trigger, Workspace
 
 from blocks import GitHubStatus, Shell
 
@@ -150,6 +151,9 @@ pipeline = Pipeline(
         ),
     ],
     on_failure=[Shell(name="report", script="echo '{{ step.name }} ended {{ step.status }}'")],
+    triggers=[
+        Trigger.cron("0 2 * * *", name="nightly", params={"repo": "example/service", "sha": "main"}),
+    ],
 )
 ```
 
@@ -181,6 +185,24 @@ pipeline = Pipeline(
 
 Other `{{ ... }}` text, such as native Argo expressions (`{{workflow.name}}`), passes through to
 Argo unchanged.
+
+### Triggers
+
+`triggers` run a pipeline on a schedule. Each one becomes a CronWorkflow named
+`<pipeline>-<name>`, written into the pipeline's file, that runs the pipeline's template:
+
+```python
+Trigger.cron(
+    "0 2 * * *",                 # cron expression or macro (@daily, @weekly, ...)
+    name="nightly",              # default "cron"; names are unique per pipeline
+    timezone="Europe/Amsterdam", # default: the workflow controller's time zone
+    params={"repo": "example/service", "sha": "main", "deploy": "false"},
+)
+```
+
+Trigger params must be declared and must set every required param. Their values may use
+`{{ values.a.b }}`; schedules and time zones are literal. `<pipeline>-<name>` can be at most 52
+characters.
 
 ### Workspace
 
@@ -216,7 +238,7 @@ manifest.
 
 | Command | Does |
 |---|---|
-| `stagecraft render <paths> --values-schema <file> --out <dir>` | Compile and validate every pipeline, then write `<pipeline>.yaml` for each. Writes nothing if any pipeline fails. |
+| `stagecraft render <paths> --values-schema <file> --out <dir>` | Compile and validate every pipeline, then write `<pipeline>.yaml` for each (its WorkflowTemplate, then a CronWorkflow per trigger). Writes nothing if any pipeline fails. |
 | `stagecraft check <paths> --values-schema <file>` | The same validation, without writing. For CI. |
 | `stagecraft graph <paths> [--pipeline <name>]` | Print a Mermaid diagram of a pipeline: stages, blocks, conditions, statuses, handlers. |
 | `stagecraft contexts <paths>` | Print each status context as `<pipeline><TAB><context>`: the checks branch protection can require. |
@@ -239,8 +261,15 @@ kubeconform -strict rendered.yaml   # with schemas for the Argo CRDs
 
 ## Known gaps
 
-- **Not built yet**: triggers (`CronWorkflow`), typed block inputs and outputs, structured
-  (object or array) values, and the `node-affinity` and `artifact` workspace strategies.
+- **Not built yet**: typed block inputs and outputs, structured (object or array) values, and
+  the `node-affinity` and `artifact` workspace strategies.
+- **Right after an install that creates a trigger**, its first ticks can be missed: Helm applies
+  the CronWorkflow before the WorkflowTemplate it references, and Argo re-checks the cron only
+  minutes later (at most 20).
+- Scheduled runs need literal values for required params; a trigger can't resolve a branch's
+  latest commit for `sha`, so a commit status for a scheduled run may fail to post (reporting is
+  best-effort).
+- A trigger can't be switched off per installation yet (no `suspend` from Helm values).
 - `argo terminate` runs no exit handlers, and `argo stop` skips the exit hook of a running block,
   so either can leave a commit status pending. Re-running the workflow updates it.
 - Stage and block handlers see Argo's Error as `Failed`, and get no exit code or message.

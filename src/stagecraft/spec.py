@@ -11,6 +11,14 @@ from stagecraft.context import CompileContext
 
 _DNS_LABEL = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
 _PARAM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+# A CronWorkflow schedule, as Argo 4.1.6's CRD validates it.
+_CRON = re.compile(
+    r"@(yearly|annually|monthly|weekly|daily|midnight|hourly)"
+    r"|@every\s+([0-9]+(ns|us|µs|ms|s|m|h))+"
+    r"|([A-Za-z0-9*,/?-]+\s+){4}[A-Za-z0-9*,/?-]+"
+)
+# Argo rejects longer CronWorkflow names: it appends a timestamp to name each run.
+_CRON_NAME_MAX = 52
 _QUANTITY = re.compile(r"[0-9]+(\.[0-9]+)?([KMGTPE]i|[kMGTPE])?")
 
 # Where blocks that use the workspace find it. It is also their working directory, unless the
@@ -225,6 +233,34 @@ class Workspace(_Model):
         return self
 
 
+class Trigger(_Model):
+    """Runs the pipeline on a schedule. Compiles to a CronWorkflow named "<pipeline>-<name>" that
+    submits the pipeline's WorkflowTemplate.
+
+    `schedule` is a cron expression ("0 2 * * *") or a macro ("@daily"), read in `timezone` (an
+    IANA name; the workflow controller's time zone if unset). `params` sets workflow params for
+    scheduled runs; values may use `{{ values.a.b }}`. Required params must be set.
+    """
+
+    schedule: str
+    name: Name = "cron"
+    params: dict[str, str] = {}
+    timezone: str | None = None
+
+    @classmethod
+    def cron(cls, schedule: str, /, **data) -> "Trigger":
+        return cls(schedule=schedule, **data)
+
+    @model_validator(mode="after")
+    def _check_schedule(self) -> Self:
+        if not _CRON.fullmatch(self.schedule):
+            raise ValueError(
+                f"trigger {self.name!r}: {self.schedule!r} is not a cron schedule "
+                "(five fields, or a macro such as @daily)"
+            )
+        return self
+
+
 class Pipeline(_Model):
     """A pipeline: ordered stages of parallel blocks, compiled to one WorkflowTemplate.
 
@@ -238,6 +274,8 @@ class Pipeline(_Model):
     from the required `repo` and `sha` params.
 
     `workspace` is required when any block declares workspace access (see Workspace).
+
+    `triggers` run the pipeline on schedules (see Trigger).
     """
 
     name: Name
@@ -248,6 +286,7 @@ class Pipeline(_Model):
     status: str | None = None
     status_reporter: Block | None = None
     workspace: Workspace | None = None
+    triggers: list[Trigger] = []
 
     @property
     def status_contexts(self) -> list[str]:
@@ -279,6 +318,31 @@ class Pipeline(_Model):
             )
         if self.workspace is not None and not users:
             raise ValueError(f"pipeline {self.name!r}: workspace is set, but no block uses it")
+        return self
+
+    @model_validator(mode="after")
+    def _check_triggers(self) -> Self:
+        if dupes := _duplicates([t.name for t in self.triggers]):
+            raise ValueError(f"pipeline {self.name!r}: duplicate trigger name {dupes[0]!r}")
+        params = {p.name: p for p in self.params}
+        for trigger in self.triggers:
+            where = f"pipeline {self.name!r}, trigger {trigger.name!r}"
+            cron_name = f"{self.name}-{trigger.name}"
+            if len(cron_name) > _CRON_NAME_MAX:
+                raise ValueError(
+                    f"{where}: CronWorkflow name {cron_name!r} is longer than "
+                    f"{_CRON_NAME_MAX} characters; shorten the pipeline or trigger name"
+                )
+            for name, value in trigger.params.items():
+                if name not in params:
+                    raise ValueError(f"{where}: undeclared param {name!r}")
+                enum = params[name].enum
+                # A value reference is only known when Argo submits the run, and checked then.
+                if enum is not None and "{{" not in value and value not in enum:
+                    raise ValueError(f"{where}: param {name!r} value {value!r} is not in {enum}")
+            for param in self.params:
+                if param.required and param.name not in trigger.params:
+                    raise ValueError(f"{where}: required param {param.name!r} has no value")
         return self
 
     @model_validator(mode="after")

@@ -7,8 +7,8 @@ with Hera's context managers, which keep module-level state.
 import dataclasses
 from collections.abc import Callable, Mapping
 
-from hera.workflows import DAG, ContainerSet, Parameter, Task, WorkflowTemplate
-from hera.workflows.models import Arguments, ContinueOn, LifecycleHook
+from hera.workflows import DAG, ContainerSet, CronWorkflow, Parameter, Task, WorkflowTemplate
+from hera.workflows.models import Arguments, ContinueOn, LifecycleHook, WorkflowTemplateRef
 from hera.workflows.models import Parameter as ParameterModel
 
 from stagecraft.compile import workspace
@@ -106,6 +106,31 @@ def compile_pipeline(pipeline: Pipeline, ctx: CompileContext) -> WorkflowTemplat
         templates=templates,
         **volumes,
     )
+
+
+def compile_triggers(pipeline: Pipeline, ctx: CompileContext) -> list[CronWorkflow]:
+    """One CronWorkflow per trigger, submitting the pipeline's WorkflowTemplate with the
+    trigger's params. Param values may reference Helm values through `ctx`."""
+    crons = []
+    for trigger in pipeline.triggers:
+        arguments = []
+        for name, value in trigger.params.items():
+            try:
+                lowered = lower(value, params=(), values=ctx.value)
+            except CompileError as e:
+                where = f"pipeline {pipeline.name!r}, trigger {trigger.name!r}, param {name!r}"
+                raise CompileError(f"{where}: {e}") from e
+            arguments.append(Parameter(name=name, value=lowered))
+        crons.append(
+            CronWorkflow(
+                name=f"{pipeline.name}-{trigger.name}",
+                schedules=[trigger.schedule],
+                timezone=trigger.timezone,
+                workflow_template_ref=WorkflowTemplateRef(name=pipeline.name),
+                arguments=arguments or None,
+            )
+        )
+    return crons
 
 
 @dataclasses.dataclass(frozen=True)

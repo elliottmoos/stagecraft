@@ -65,6 +65,12 @@ Facts confirmed by experiment or by `tests/integration`. Re-check them when bump
   and its stage fail. A later stage then shows as an `Omitted` node.
 - `volumeClaimGC: OnWorkflowCompletion` deletes the run's workspace claim after a failed run too
   (with completed pods still present).
+- Helm applies a release's `CronWorkflow`s before its `WorkflowTemplate`s (Helm 4.1.0 sorts unknown
+  kinds by name and creates one kind at a time; seen on kind). A new CronWorkflow
+  whose template doesn't exist yet is marked invalid ("WorkflowTemplate Informer cannot find
+  WorkflowTemplate") and isn't scheduled until the controller re-processes it (about 3 minutes on
+  kind; at most the 20-minute informer resync). Accepted. Tests install the template first.
+- CronWorkflow names are limited to 52 characters (`argo lint` and the controller reject longer).
 - `argo terminate` runs **no** exit handlers, so a terminated run can leave commit statuses
   pending. Accepted: builds are rarely terminated, and re-running the workflow updates the
   statuses. Don't add machinery for this case.

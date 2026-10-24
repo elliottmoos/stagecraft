@@ -88,7 +88,8 @@ pipeline = Pipeline(
     ],
     on_success=[Notify(channel="{{ values.notify.channel }}")],
     on_failure=[Notify(channel="{{ values.notify.alertChannel }}", include_failures=True)],
-    triggers=[Trigger.cron("0 2 * * *", params={"push": "true"})],
+    triggers=[Trigger.cron("0 2 * * *", name="nightly",
+                           params={"repo": "example/service", "sha": "main", "push": "true"})],
 )
 ```
 
@@ -118,7 +119,7 @@ A block is a unit with a typed contract. The framework's job is to map each cont
 | `on_failure`, `on_success`, `finally_` | One task-level `exit` hook calling a generated handler DAG, whose tasks are guarded by `when` on the step's status |
 | `status="ctx/name"` | A "pending" report task the step depends on, then the final state from the step's `exit` hook (pipeline: `onExit`), all through the pipeline's `status_reporter` block |
 | Pipeline `on_success` / `on_failure` | Generated `onExit` template branching on `{{workflow.status}}` |
-| Triggers | `CronWorkflow` |
+| Triggers | A `CronWorkflow` per trigger, `workflowTemplateRef` to the pipeline's template, in the pipeline's file |
 | Params | Workflow `arguments.parameters` |
 | Escape hatch (raw Hera template wrapped in a minimal contract) | Passed through unchanged |
 
@@ -139,6 +140,10 @@ The API call is made by the pipeline's `status_reporter`, an ordinary block owne
 For each step with `status=`: a "pending" report task shares the step's `depends` and `when`, and the step depends on it, so pending always lands before the final state. (A `running` hook was tried: it can miss short steps on Argo 4.1.6, and a late pending would overwrite the final state.) The step's `exit` hook reports success, failure, or error. A step skipped by `when` gets a "success" report with the description "Skipped" from a sibling task with the negated condition, so a required check for a conditional stage still passes. A step that never starts because an earlier stage failed is never reported, so nothing is left pending. The pipeline's own context reports pending at start and its final state from `onExit`.
 
 Accepted gaps: `argo terminate` runs no exit handlers, and `argo stop` skips the exit hook of a block that was running. Either can leave a context pending; re-running the workflow updates it.
+
+**Triggers.** `Trigger.cron(schedule, name=, params=, timezone=)` compiles to a `CronWorkflow` named `<pipeline>-<name>` (at most 52 characters, Argo's limit) whose `workflowSpec` is a `workflowTemplateRef` to the pipeline's template plus the trigger's params. It is written into the pipeline's file after the template. One schedule per trigger; schedules are literal and checked against the CRD's pattern. Trigger params must be declared, must set every required param, and must be in the param's enum unless they reference a Helm value (`{{ values.a.b }}` is allowed in trigger params; Argo checks the enum at submission). Concurrency policy and history limits keep Argo's defaults until a pipeline needs otherwise.
+
+Accepted gap (decided 2026-10-24; Kubernetes resources are eventually consistent anyway): Helm applies a release's `CronWorkflow`s before its `WorkflowTemplate`s. Helm 4.1.0 sorts kinds it doesn't know by name and creates resources in batches by kind, waiting for each batch (`lessByKind`, `batchPerform`); watching an install on kind showed the cron created 6.5 ms before its template. Argo 4.1.6 validates a new `CronWorkflow` against its template on arrival. If the template isn't there yet, the cron is marked invalid and not scheduled until the controller processes it again: about 3 minutes on kind, and at most its 20-minute informer resync. So the first ticks after an install that creates a cron can be missed. Inlining the workflow spec in each cron would avoid this, at the cost of bigger manifests and scheduled runs no longer linked to the template in the UI.
 
 **Workspace strategies.** Constraint: the current workspace is an EBS-backed PVC (ReadWriteOnce), which limits true cross-node parallelism. Blocks declare their workspace access, and the strategy is a compile-time choice stated explicitly in the pipeline definition (`workspace=Workspace(strategy=..., size=...)`); it is required when any block declares access, and never inferred (decided 2026-10-24). The strategy consumes no Helm values and nothing from the `CompileContext`: each rendered manifest has exactly one shape, visible in the pipeline file and the diff.
 

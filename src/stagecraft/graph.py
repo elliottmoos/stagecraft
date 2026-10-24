@@ -1,7 +1,7 @@
 """Mermaid diagram of a pipeline, for reading its shape in review or docs.
 
-It shows the pipeline as authored (stages, blocks, conditions, statuses, handlers), not the Argo
-templates it compiles to.
+It shows the pipeline as authored (stages, blocks, conditions, statuses, handlers, triggers), not
+the Argo templates it compiles to.
 """
 
 import json
@@ -28,6 +28,10 @@ def mermaid(pipeline: Pipeline) -> str:
         lines += _handlers(f"s{i}", stage, HANDLER_FIELDS)
     last = f"s{len(pipeline.stages) - 1}"
     lines += _handlers(last, pipeline, ("on_success", "on_failure"), node="p", edge="pipeline ")
+    for k, trigger in enumerate(pipeline.triggers):
+        schedule = " ".join(filter(None, [trigger.schedule, trigger.timezone]))
+        lines.append(f'  t{k}(["{_escape(trigger.name)}<br/>{_escape(schedule)}"])')
+        lines.append(f"  t{k} -.-> s0")
     return "\n".join(lines) + "\n"
 
 

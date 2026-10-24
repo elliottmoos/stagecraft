@@ -12,7 +12,7 @@ seen with Helm 4.1).
 import re
 
 import yaml
-from hera.workflows import WorkflowTemplate
+from hera.workflows import CronWorkflow, WorkflowTemplate
 
 from stagecraft.context import VALUE_MARKER
 from stagecraft.errors import SerializeError
@@ -58,11 +58,11 @@ _Dumper.add_representer(_Whole, _represent_whole)
 _Dumper.add_representer(_Spliced, _represent_spliced)
 
 
-def serialize(template: WorkflowTemplate) -> str:
+def serialize(*manifests: WorkflowTemplate | CronWorkflow) -> str:
+    """One YAML file holding `manifests` as separate documents."""
     paths: list[tuple[str, bool]] = []
-    data = _tokenize(template.to_dict(), paths)
-    text = yaml.dump(
-        data,
+    text = yaml.dump_all(
+        [_tokenize(m.to_dict(), paths) for m in manifests],
         Dumper=_Dumper,
         sort_keys=False,
         allow_unicode=True,

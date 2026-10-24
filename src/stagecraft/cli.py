@@ -9,7 +9,7 @@ from typing import Annotated
 import typer
 
 from stagecraft import __version__
-from stagecraft.compile import compile_pipeline
+from stagecraft.compile import compile_pipeline, compile_triggers
 from stagecraft.context import CompileContext
 from stagecraft.contract import ValuesContract
 from stagecraft.errors import StagecraftError
@@ -49,7 +49,8 @@ def render(
 ) -> None:
     """Compile pipelines and write one template file per pipeline.
 
-    Every Helm value reference is checked against the values schema. Nothing is written unless
+    A pipeline's file holds its WorkflowTemplate and a CronWorkflow per trigger. Every Helm value
+    reference is checked against the values schema. Nothing is written unless
     every pipeline compiles.
     """
     with _errors():
@@ -76,7 +77,8 @@ def graph(
         str | None, typer.Option(help="Pipeline to draw, when the paths hold several.")
     ] = None,
 ) -> None:
-    """Print a Mermaid diagram of a pipeline: its stages, blocks, conditions, and handlers."""
+    """Print a Mermaid diagram of a pipeline: its stages, blocks, conditions, handlers, and
+    triggers."""
     with _errors():
         typer.echo(mermaid(_pick(load_pipelines(paths), pipeline)), nl=False)
 
@@ -104,9 +106,13 @@ def _errors() -> Iterator[None]:
 
 
 def _render(paths: list[Path], values_schema: Path, values_prefix: str) -> dict[str, str]:
-    """Each pipeline's rendered template, by pipeline name."""
+    """Each pipeline's rendered file (its WorkflowTemplate, then a CronWorkflow per trigger), by
+    pipeline name."""
     ctx = CompileContext(ValuesContract.load(values_schema, values_prefix))
-    return {p.name: serialize(compile_pipeline(p, ctx)) for p in load_pipelines(paths)}
+    return {
+        p.name: serialize(compile_pipeline(p, ctx), *compile_triggers(p, ctx))
+        for p in load_pipelines(paths)
+    }
 
 
 def _pick(pipelines: list[Pipeline], name: str | None) -> Pipeline:

@@ -1,5 +1,5 @@
 from stagecraft.graph import mermaid
-from stagecraft.spec import Param, Pipeline, Stage, Workspace
+from stagecraft.spec import Param, Pipeline, Stage, Trigger, Workspace
 
 from fixtures.blocks import Shell
 
@@ -93,3 +93,16 @@ def test_label_text_is_escaped():
     assert '  subgraph s0["s<br/>when: #quot;{{ param.x }}#quot; #lt; #quot;#35;a#quot;"]' in (
         mermaid(pipeline).splitlines()
     )
+
+
+def test_triggers_point_at_the_first_stage():
+    pipeline = Pipeline(
+        name="p",
+        stages=[Stage("s", [Shell(script="")])],
+        triggers=[Trigger.cron("0 2 * * *", name="nightly", timezone="UTC")],
+    )
+
+    assert mermaid(pipeline).splitlines()[-2:] == [
+        '  t0(["nightly<br/>0 2 * * * UTC"])',
+        "  t0 -.-> s0",
+    ]
