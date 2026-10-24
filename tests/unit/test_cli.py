@@ -52,6 +52,7 @@ def test_render_accepts_a_directory(tmp_path):
         "hooks-ci.yaml",
         "smoke-ci.yaml",
         "status-ci.yaml",
+        "workspace-ci.yaml",
     ]
 
 

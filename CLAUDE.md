@@ -56,6 +56,13 @@ Facts confirmed by experiment or by `tests/integration`. Re-check them when bump
 - `argo stop` doesn't run the `exit` hook of a block that was running (the stage's still runs).
   A block-level commit status stays pending after a stop until the workflow is re-run.
 - `argo stop` runs exit handlers with `{{workflow.status}} == Failed`.
+- A `containerSet` pod gets a volume only for mounts on `containerSet.volumeMounts` (applied to
+  every container). A mount on a single container fails pod creation ("volumeMounts[0].name: Not
+  found") and the workflow ends in Error. So a group has one shared, read-only workspace mount.
+- In a `containerSet`, a failing container doesn't stop its siblings: they finish, then the pod
+  and its stage fail. A later stage then shows as an `Omitted` node.
+- `volumeClaimGC: OnWorkflowCompletion` deletes the run's workspace claim after a failed run too
+  (with completed pods still present).
 - `argo terminate` runs **no** exit handlers, so a terminated run can leave commit statuses
   pending. Accepted: builds are rarely terminated, and re-running the workflow updates the
   statuses. Don't add machinery for this case.
@@ -111,7 +118,10 @@ that way so tests never touch the user's current kube context.
 - Stagecraft never generates chart files or the values contract. The fixture chart under
   `tests/fixtures/` is test-only and never published.
 - Workspace strategy is a compile-time pipeline choice and reads no Helm values or
-  `CompileContext` data.
+  `CompileContext` data. It is always explicit (`Pipeline(workspace=Workspace(...))`), never
+  inferred. Only `containerset` exists; add `node-affinity` or `artifact` when a pipeline needs it.
+- A workspace writer is its stage's only workspace block, so containerSet groups are all readers.
+  Handlers and the status reporter can't use the workspace yet (decided 2026-10-24).
 - Hera's API changes between versions, so check the pinned version's docs rather than guessing.
 - Don't generalize before two or three real pipelines exist.
 

@@ -2,7 +2,7 @@
 
 import re
 from abc import abstractmethod
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from hera.workflows import Container, Script
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
@@ -11,6 +11,11 @@ from stagecraft.context import CompileContext
 
 _DNS_LABEL = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
 _PARAM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+_QUANTITY = re.compile(r"[0-9]+(\.[0-9]+)?([KMGTPE]i|[kMGTPE])?")
+
+# Where blocks that use the workspace find it. It is also their working directory, unless the
+# block's template sets its own.
+WORKSPACE_PATH = "/workspace"
 
 
 def _check_name(value: str) -> str:
@@ -114,9 +119,14 @@ class Block(_Step):
     String fields may contain placeholders such as `{{ param.repo }}` or `{{ values.a.b }}`; the
     compiler lowers them before calling `compile`. Inside `compile`, Helm values come only from
     `ctx.value(path, type)`. The compiler also names the returned template.
+
+    `workspace` declares access to the pipeline's shared workspace, mounted at WORKSPACE_PATH:
+    "read" mounts it read-only, "write" read-write. How blocks share it is the pipeline's
+    workspace strategy.
     """
 
     name: Name | None = None
+    workspace: Literal["none", "read", "write"] = "none"
 
     @property
     def block_name(self) -> str:
@@ -146,6 +156,18 @@ class Stage(_Step):
         _check_block_names(f"stage {self.name!r}", self.blocks)
         return self
 
+    @model_validator(mode="after")
+    def _check_writers(self) -> Self:
+        users = [b for b in self.blocks if b.workspace != "none"]
+        writers = [b.block_name for b in users if b.workspace == "write"]
+        if writers and len(users) > 1:
+            raise ValueError(
+                f"stage {self.name!r}: block {writers[0]!r} writes the workspace, so it must be "
+                "the stage's only block using the workspace (parallel blocks would race it); "
+                "put the others in another stage"
+            )
+        return self
+
 
 def _check_block_names(where: str, blocks: list[Block]) -> None:
     names = [b.block_name for b in blocks]
@@ -163,17 +185,44 @@ def _check_handlers(where: str, owner: BaseModel, fields: tuple[str, ...]) -> No
         handlers: list[Block] = getattr(owner, field)
         _check_block_names(f"{where} {field}", handlers)
         for handler in handlers:
-            if not _is_plain(handler):
+            if not is_plain(handler):
                 raise ValueError(
                     f"{where} {field}: block {handler.block_name!r}: "
                     "handler blocks cannot set when, status, or handlers"
                 )
+            if handler.workspace != "none":
+                raise ValueError(
+                    f"{where} {field}: block {handler.block_name!r}: "
+                    "handler blocks cannot use the workspace"
+                )
 
 
-def _is_plain(block: Block) -> bool:
+def is_plain(block: Block) -> bool:
     """True if the block sets no step features: it only runs (handlers, the status reporter)."""
     has_handlers = any(getattr(block, f) for f in HANDLER_FIELDS)
     return block.when is None and block.status is None and not has_handlers
+
+
+class Workspace(_Model):
+    """A workspace shared by the pipeline's blocks: one ReadWriteOnce volume per run, from the
+    cluster's default StorageClass, deleted when the run ends.
+
+    `strategy` is how parallel blocks share it. "containerset" runs a stage's workspace blocks
+    as containers of one pod, so the volume is only ever mounted by one pod at a time. Those
+    blocks must compile to a Container and cannot set when, status, or handlers (set them on the
+    stage); a stage with a single workspace block runs it in its own pod.
+
+    `size` is a Kubernetes quantity, such as "5Gi".
+    """
+
+    strategy: Literal["containerset"]
+    size: str
+
+    @model_validator(mode="after")
+    def _check_size(self) -> Self:
+        if not _QUANTITY.fullmatch(self.size):
+            raise ValueError(f"workspace size {self.size!r} must be a Kubernetes quantity")
+        return self
 
 
 class Pipeline(_Model):
@@ -187,6 +236,8 @@ class Pipeline(_Model):
     ordinary block that makes the API call. It reads `{{ status.context }}`, `{{ status.state }}`
     ("pending", "success", "failure", "error"), and `{{ status.description }}`, and the commit
     from the required `repo` and `sha` params.
+
+    `workspace` is required when any block declares workspace access (see Workspace).
     """
 
     name: Name
@@ -196,6 +247,7 @@ class Pipeline(_Model):
     on_failure: list[Block] = []
     status: str | None = None
     status_reporter: Block | None = None
+    workspace: Workspace | None = None
 
     @property
     def status_contexts(self) -> list[str]:
@@ -213,6 +265,23 @@ class Pipeline(_Model):
         return self
 
     @model_validator(mode="after")
+    def _check_workspace(self) -> Self:
+        users = [
+            f"stage {stage.name!r}, block {block.block_name!r}"
+            for stage in self.stages
+            for block in stage.blocks
+            if block.workspace != "none"
+        ]
+        if users and self.workspace is None:
+            raise ValueError(
+                f"pipeline {self.name!r}: {users[0]} uses the workspace; "
+                "set workspace=Workspace(strategy=..., size=...) on the pipeline"
+            )
+        if self.workspace is not None and not users:
+            raise ValueError(f"pipeline {self.name!r}: workspace is set, but no block uses it")
+        return self
+
+    @model_validator(mode="after")
     def _check_statuses(self) -> Self:
         contexts = self.status_contexts
         if dupes := _duplicates(contexts):
@@ -221,9 +290,13 @@ class Pipeline(_Model):
             return self
         if self.status_reporter is None:
             raise ValueError(f"pipeline {self.name!r}: status contexts need a status_reporter")
-        if not _is_plain(self.status_reporter):
+        if not is_plain(self.status_reporter):
             raise ValueError(
                 f"pipeline {self.name!r}: the status_reporter cannot set when, status, or handlers"
+            )
+        if self.status_reporter.workspace != "none":
+            raise ValueError(
+                f"pipeline {self.name!r}: the status_reporter cannot use the workspace"
             )
         required = {p.name for p in self.params if p.required}
         if not {"repo", "sha"} <= required:

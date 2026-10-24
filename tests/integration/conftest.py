@@ -60,6 +60,9 @@ class Argo:
             time.sleep(1)
         raise AssertionError(f"{workflow} has no running pod {name or ''} after {timeout}s")
 
+    def kubectl(self, *args: str) -> str:
+        return run(require_tool("kubectl"), "--context", CONTEXT, "-n", NAMESPACE, *args)
+
     def stop(self, workflow: str) -> None:
         run(*self.argo, "stop", workflow)
 

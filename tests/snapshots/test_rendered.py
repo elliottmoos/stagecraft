@@ -7,7 +7,7 @@ from stagecraft.compile import compile_pipeline
 from stagecraft.serialize import serialize
 
 from fixtures.contract import CONTEXT
-from fixtures.pipelines import escaping, handlers, hooks, smoke, status
+from fixtures.pipelines import escaping, handlers, hooks, smoke, status, workspace
 from support import (
     CRD_SCHEMAS,
     build_chart,
@@ -23,6 +23,7 @@ PIPELINES = [
     handlers.pipeline,
     hooks.pipeline,
     status.pipeline,
+    workspace.pipeline,
 ]
 
 

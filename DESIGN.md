@@ -77,14 +77,10 @@ pipeline = Pipeline(
                                 workspace="write")]),
         Stage("verify", [
             Lint(workspace="read"),
-            UnitTests(
-                workspace="read",
-                status="ci/unit-tests",
-                on_failure=[Notify(channel="{{ values.notify.alertChannel }}")],
-                finally_=[UploadReports()],
-            ),
+            UnitTests(workspace="read"),
             TypeCheck(workspace="read"),
-        ], status="ci/verify"),
+        ], status="ci/verify",
+           on_failure=[Notify(channel="{{ values.notify.alertChannel }}")]),
         Stage("package", [BuildImage(push="{{ param.push }}", workspace="read")],
               status="ci/package"),
         Stage("deploy", [DeployStaging()],
@@ -104,7 +100,8 @@ Rules:
   - Inside `when`, `{{ param.x }}` becomes a quoted string, so conditions compare strings (`{{ param.deploy }} == 'true'`). Argo parses bare words, so an unquoted `true == 'true'` is false.
 - Declared `Param`s, including descriptions and enums, become the Argo UI submit form.
 - Pipeline files contain no installation-specific literals. They reference Helm values by path.
-- `workspace=Workspace(strategy=..., size=...)` declares the workspace strategy at compile time. It is a pipeline property, not an installation property, and uses no Helm values (section 7).
+- `workspace=Workspace(strategy=..., size=...)` declares the workspace strategy at compile time. It is a pipeline property, not an installation property, and uses no Helm values (section 7). It is required whenever a block declares workspace access, and never inferred.
+- Blocks that share a `containerset` pod (the parallel readers in `verify` above) cannot set their own `when`, `status`, or handlers; the stage carries them (section 7).
 
 ## 6. The block base type and its Argo mapping
 
@@ -113,7 +110,7 @@ A block is a unit with a typed contract. The framework's job is to map each cont
 | Block feature | Argo mechanism |
 |---|---|
 | Typed inputs / outputs | Template `inputs` / `outputs` parameters and artifacts |
-| `workspace`: `none`, `read`, `write` (+ `paths`) | Volume mounts, `containerSet` grouping, or artifact transfer (section 7) |
+| `workspace`: `none`, `read`, `write` | Volume mounts, `containerSet` grouping, or artifact transfer (section 7) |
 | Declared value references (path and expected type) | Helm expressions, validated against the chart's values contract |
 | Secret references | `secretKeyRef` env or volume; secret names come from Helm values, never secret contents |
 | Resources, retry, timeout, service account, node selection | Template fields, whose values come from Helm values |
@@ -143,13 +140,19 @@ For each step with `status=`: a "pending" report task shares the step's `depends
 
 Accepted gaps: `argo terminate` runs no exit handlers, and `argo stop` skips the exit hook of a block that was running. Either can leave a context pending; re-running the workflow updates it.
 
-**Workspace strategies.** Constraint: the current workspace is an EBS-backed PVC (ReadWriteOnce), which limits true cross-node parallelism. Blocks declare their workspace access, and the strategy is a compile-time choice made in the pipeline definition (`workspace=Workspace(strategy=..., size=...)`), either stated explicitly or inferred from block declarations with an explicit override. The strategy consumes no Helm values and nothing from the `CompileContext`: each rendered manifest has exactly one shape, visible in the pipeline file and the diff.
+**Workspace strategies.** Constraint: the current workspace is an EBS-backed PVC (ReadWriteOnce), which limits true cross-node parallelism. Blocks declare their workspace access, and the strategy is a compile-time choice stated explicitly in the pipeline definition (`workspace=Workspace(strategy=..., size=...)`); it is required when any block declares access, and never inferred (decided 2026-10-24). The strategy consumes no Helm values and nothing from the `CompileContext`: each rendered manifest has exactly one shape, visible in the pipeline file and the diff.
 
-1. `containerset`: a stage of read-only blocks becomes one `containerSet` pod with a shared `emptyDir` (the Jenkins pod-per-build model). Default for parallel read-only stages.
+1. `containerset`: a stage's workspace blocks, when there are two or more, run as containers of one `containerSet` pod. Implemented in slice 7:
+   - The workspace is one ReadWriteOnce claim per run (`volumeClaimTemplates`, the pipeline's `size`, no storage class), deleted when the run ends whether it succeeded or failed (`volumeClaimGC: OnWorkflowCompletion`). Stages run one after another, so only one pod mounts it at a time.
+   - It is mounted at `/workspace`, read-only for `read` blocks, and is the working directory unless the block's template sets one. Blocks with `workspace="none"` don't mount it and keep their own pods.
+   - A stage with one workspace block runs it in its own pod. A grouped stage's sub-DAG has one `workspace` task (template `<stage>-workspace`) holding a container per block, plus a task per non-workspace block.
+   - The mount is on the `containerSet`, not on each container: Argo 4.1.6 only adds a claim's volume to the pod for containerSet-level mounts. Since that mount applies to every container, a group holds only readers.
+   - Grouped blocks must compile to a `Container` (containerSets run no scripts) that sets only container fields (no retries, timeouts, inputs, or other template-level fields), and cannot set `when`, `status`, or handlers: Argo has no per-container conditions or hooks. Stage-level `when`, `status`, and handlers work as usual.
+   - A failing container fails the pod, and the stage, after its siblings finish (verified on 4.1.6). Resource requests are summed over the containers.
 2. `node-affinity`: pod affinity on the workflow label so parallel pods share the RWO volume on one node.
 3. `artifact`: prepare once, upload to object storage, each step works in its own `emptyDir` and uploads only declared outputs.
 
-`write` blocks declare `paths`, and the compiler rejects overlapping parallel writers.
+A block that writes the workspace must be its stage's only block using it: parallel readers would race it, and two writers would need declared `paths` and an overlap check, deferred until a pipeline needs parallel writers. Handler blocks and the status reporter cannot use the workspace yet: whether an exit hook finishes before the next stage mounts the volume is unverified.
 
 Strategy options are limited to what the pipeline itself needs (for example workspace `size`). Platform details are never passed to a strategy as values. They resolve on the cluster at runtime:
 - Storage class: omitted, so the cluster's default StorageClass applies.
@@ -259,7 +262,6 @@ Do not generalize before two or three real pipelines exist.
 ## 14. Open decisions
 
 - Where pipeline definition files live: the chart repo or a separate pipelines repo.
-- Whether the workspace strategy is always stated explicitly in the pipeline or inferred from block declarations with an override.
 - Commit rendered templates into the chart repo, or publish them as a build artifact.
 - Template naming across multiple releases in one namespace versus stable names in the Argo UI.
 - Whether a reference block library belongs in a third package.
