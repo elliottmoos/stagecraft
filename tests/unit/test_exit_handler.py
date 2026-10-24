@@ -36,7 +36,11 @@ def test_handlers_run_from_an_exit_handler_dag_branching_on_workflow_status():
         (t["name"], t["template"], t["when"]) for t in template(m, "on-exit")["dag"]["tasks"]
     ] == [
         ("on-success-notify", "on-success-notify", "{{workflow.status}} == Succeeded"),
-        ("on-failure-notify", "on-failure-notify", "{{workflow.status}} != Succeeded"),
+        (
+            "on-failure-notify",
+            "on-failure-notify",
+            "{{workflow.status}} == Failed || {{workflow.status}} == Error",
+        ),
     ]
 
 

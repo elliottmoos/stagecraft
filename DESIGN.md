@@ -101,6 +101,7 @@ Rules:
 - Placeholders are lowered to the right expression language:
   - `{{ param.x }}`, `{{ step.name }}`, `{{ step.status }}` become Argo expressions (workflow parameters, node info).
   - `{{ values.a.b }}` becomes a Helm expression (`{{ .Values.a.b }}`).
+  - Inside `when`, `{{ param.x }}` becomes a quoted string, so conditions compare strings (`{{ param.deploy }} == 'true'`). Argo parses bare words, so an unquoted `true == 'true'` is false.
 - Declared `Param`s, including descriptions and enums, become the Argo UI submit form.
 - Pipeline files contain no installation-specific literals. They reference Helm values by path.
 - `workspace=Workspace(strategy=..., size=...)` declares the workspace strategy at compile time. It is a pipeline property, not an installation property, and uses no Helm values (section 7).
@@ -117,20 +118,22 @@ A block is a unit with a typed contract. The framework's job is to map each cont
 | Secret references | `secretKeyRef` env or volume; secret names come from Helm values, never secret contents |
 | Resources, retry, timeout, service account, node selection | Template fields, whose values come from Helm values |
 | `when` (stage or block) | `when` on the task |
-| `on_failure`, `on_success`, `finally_` | Task-level `exit` lifecycle hooks with an expression |
+| `on_failure`, `on_success`, `finally_` | One task-level `exit` hook calling a generated handler DAG, whose tasks are guarded by `when` on the step's status |
 | `status="ctx/name"` | `running` and `exit` hooks that report pending, then success or failure |
 | Pipeline `on_success` / `on_failure` | Generated `onExit` template branching on `{{workflow.status}}` |
 | Triggers | `CronWorkflow` |
 | Params | Workflow `arguments.parameters` |
 | Escape hatch (raw Hera template wrapped in a minimal contract) | Passed through unchanged |
 
-Handler blocks (`on_failure`, `finally_`) are ordinary blocks with the same contract and receive context (step name, status, failure message) through hook arguments.
+Handler blocks (`on_success`, `on_failure`, `finally_`) are ordinary blocks with the same contract. They receive context through `{{ step.name }}` and `{{ step.status }}`. In stage and block handlers these are fixed at compile time per outcome (`Succeeded` or `Failed`, with Argo's Error reported as Failed); in pipeline handlers they are the workflow's name and status. Argo exposes no exit code or failure message to task hooks. Handler blocks cannot have their own `when` or handlers.
+
+Handler failures: a failing pipeline handler fails the pipeline (Argo's `onExit` default, kept on purpose because handler failures are unexpected). A failing stage or block handler shows as failed in the Argo UI but does not fail the pipeline, because Argo task hooks cannot fail a workflow; this is accepted.
 
 ## 7. Lowering rules
 
 **Stages to DAG.** Each stage compiles to its own sub-DAG template, invoked as one task in the top-level DAG. A stage then has a single status, which makes stage-level `when`, hooks, and `status` straightforward. Inter-stage `depends` is generated, one edge per stage. Tradeoff to evaluate: the extra nesting level in the Argo UI graph.
 
-**Hooks.** Prefer task-level hooks over template-level hooks (template-level fires everywhere the template is used), and prefer hooks over sibling tasks with `depends: X.Failed`, which fail the DAG and clutter the graph.
+**Hooks.** Prefer task-level hooks over template-level hooks (template-level fires everywhere the template is used), and prefer hooks over sibling tasks with `depends: X.Failed`. Such a sibling marks the failure as handled, so the stage and the workflow succeed despite the failed step (verified on Argo 4.1.6). Use the `exit` hook rather than expression hooks: an expression hook on a sub-DAG (stage) task never fires when another task depends on it, while the `exit` hook always fires and can pass `{{tasks.<name>.status}}` to its template. A step's handlers therefore run from one `exit` hook that calls a handler DAG branching on status, the same shape as the pipeline's `onExit`. A step skipped by `when` runs no handlers.
 
 **Commit statuses.** `status=` expands into two hooks (`running` posts pending, `exit` maps node status to success, failure, or error). Requirements: `sha` and `repo` are params available before any clone, statuses are best-effort and must not fail the build, context names are validated as unique per pipeline, and skipped or cancelled nodes must never leave a required check stuck pending. How skipped nodes are represented is an open decision.
 

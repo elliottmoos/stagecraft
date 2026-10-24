@@ -5,13 +5,15 @@ with Hera's context managers, which keep module-level state.
 """
 
 import dataclasses
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from hera.workflows import DAG, Parameter, Task, WorkflowTemplate
+from hera.workflows.models import Arguments, LifecycleHook
+from hera.workflows.models import Parameter as ParameterModel
 
-from stagecraft.compile.placeholders import lower_model
+from stagecraft.compile.placeholders import lower, lower_model
 from stagecraft.errors import CompileError
-from stagecraft.spec import Block, Param, Pipeline, Stage
+from stagecraft.spec import HANDLER_FIELDS, Block, Param, Pipeline, Stage
 
 ENTRYPOINT = "main"
 EXIT_HANDLER = "on-exit"
@@ -19,26 +21,49 @@ EXIT_HANDLER = "on-exit"
 # `{{ step.* }}` in pipeline-level handlers refers to the workflow itself.
 _WORKFLOW_STEP = {"name": "{{workflow.name}}", "status": "{{workflow.status}}"}
 
+# Handlers run from a generated DAG whose tasks are guarded by a `when` on the step's status: the
+# workflow's `onExit` for pipeline handlers, a task `exit` hook for stage and block handlers.
+# Verified on Argo 4.1.6: expression hooks on a sub-DAG task never fire when another task depends
+# on it, while `exit` hooks fire and can pass `{{tasks.<name>.status}}`. A handler template is
+# compiled per outcome so `{{ step.status }}` can be fixed in it; Error is reported as Failed.
+_CONDITIONS = {
+    "succeeded": "{status} == Succeeded",
+    "failed": "{status} == Failed || {status} == Error",
+}
+_OUTCOME_STATUS = {"succeeded": "Succeeded", "failed": "Failed"}
+_HANDLER_OUTCOMES = {
+    "on_success": ["succeeded"],
+    "on_failure": ["failed"],
+    "finally_": ["succeeded", "failed"],
+}
+_STATUS_INPUT = "status"
+
 
 def compile_pipeline(pipeline: Pipeline) -> WorkflowTemplate:
     """Compile a pipeline to a WorkflowTemplate.
 
     Each stage becomes a sub-DAG template of parallel block tasks, invoked as one task in the
-    entrypoint DAG. Stage N depends on stage N-1, one edge per stage. Pipeline handlers run from
-    an `onExit` DAG whose tasks branch on `{{workflow.status}}`.
+    entrypoint DAG. Stage N depends on stage N-1, one edge per stage. Stage and block handlers run
+    from task `exit` hooks, pipeline handlers from the workflow's `onExit`.
     """
     params = {p.name for p in pipeline.params}
     templates = []
     stage_tasks = []
     previous: Stage | None = None
     for stage in pipeline.stages:
+        where = f"pipeline {pipeline.name!r}, stage {stage.name!r}"
         stage_dag, block_templates = _compile_stage(pipeline, stage, params)
-        templates += [stage_dag, *block_templates]
+        hooks, hook_templates = _compile_exit_hook(
+            stage, task=stage.name, path=stage.name, params=params, where=where
+        )
+        templates += [stage_dag, *block_templates, *hook_templates]
         stage_tasks.append(
             Task(
                 name=stage.name,
                 template=stage_dag,
                 depends=previous.name if previous else None,
+                when=_lower_when(stage.when, params, where),
+                hooks=hooks,
             )
         )
         previous = stage
@@ -65,44 +90,109 @@ def _compile_param(param: Param) -> Parameter:
 
 def _compile_stage(pipeline: Pipeline, stage: Stage, params: set[str]):
     tasks = []
-    block_templates = []
+    templates = []
     for block in stage.blocks:
-        template = _compile_block(
+        name = f"{stage.name}-{block.block_name}"
+        where = f"pipeline {pipeline.name!r}, stage {stage.name!r}, block {block.block_name!r}"
+        template = _compile_block(block, name=name, params=params, where=where)
+        hooks, hook_templates = _compile_exit_hook(
             block,
-            name=f"{stage.name}-{block.block_name}",
+            task=block.block_name,
+            path=f"{stage.name}/{block.block_name}",
             params=params,
-            where=f"pipeline {pipeline.name!r}, stage {stage.name!r}, block {block.block_name!r}",
+            where=where,
         )
-        block_templates.append(template)
-        tasks.append(Task(name=block.block_name, template=template))
-    return DAG(name=stage.name, tasks=tasks), block_templates
+        templates += [template, *hook_templates]
+        tasks.append(
+            Task(
+                name=block.block_name,
+                template=template,
+                when=_lower_when(block.when, params, where),
+                hooks=hooks,
+            )
+        )
+    return DAG(name=stage.name, tasks=tasks), templates
+
+
+def _compile_exit_hook(step: Block | Stage, task: str, path: str, params: set[str], where: str):
+    """An `exit` hook running the step's handlers, plus the templates it needs.
+
+    `task` is the step's task name in its DAG and `path` is its `{{ step.name }}`. Generated
+    templates are named after the step's own template: "<stage>[-<block>]-on-exit" for the
+    handler DAG and "<stage>[-<block>]-<handler task>" for each handler.
+    """
+    prefix = path.replace("/", "-")
+    templates = _compile_handler_dag(
+        step,
+        HANDLER_FIELDS,
+        dag_name=f"{prefix}-on-exit",
+        prefix=f"{prefix}-",
+        status=f"{{{{inputs.parameters.{_STATUS_INPUT}}}}}",
+        step_context=lambda outcome: {"name": path, "status": _OUTCOME_STATUS[outcome]},
+        params=params,
+        where=where,
+    )
+    if not templates:
+        return None, []
+    status = ParameterModel(name=_STATUS_INPUT, value=f"{{{{tasks.{task}.status}}}}")
+    hook = LifecycleHook(template=templates[0].name, arguments=Arguments(parameters=[status]))
+    return {"exit": hook}, templates
 
 
 def _compile_exit_handler(pipeline: Pipeline, params: set[str]) -> list:
-    """The onExit DAG and its handler templates, or [] when the pipeline has no handlers."""
+    """The onExit DAG and its handler templates, or [] when the pipeline has no handlers.
+
+    A failing handler fails the pipeline: that is Argo's default for onExit (verified on 4.1.6)
+    and intended, since handler failures are unexpected.
+    """
+    return _compile_handler_dag(
+        pipeline,
+        ("on_success", "on_failure"),
+        dag_name=EXIT_HANDLER,
+        prefix="",
+        status="{{workflow.status}}",
+        step_context=lambda outcome: _WORKFLOW_STEP,
+        params=params,
+        where=f"pipeline {pipeline.name!r}",
+    )
+
+
+def _compile_handler_dag(
+    owner: Pipeline | Stage | Block,
+    fields: tuple[str, ...],
+    dag_name: str,
+    prefix: str,
+    status: str,
+    step_context: Callable[[str], Mapping[str, str]],
+    params: set[str],
+    where: str,
+) -> list:
+    """A DAG running `owner`'s handlers, each guarded by `when` on `status`, followed by the
+    handler templates. Returns [] when there are no handlers."""
     tasks = []
-    handler_templates = []
-    branches = [
-        ("on_success", pipeline.on_success, "{{workflow.status}} == Succeeded"),
-        ("on_failure", pipeline.on_failure, "{{workflow.status}} != Succeeded"),
-    ]
-    for field, blocks, when in branches:
-        for block in blocks:
-            name = f"{field.replace('_', '-')}-{block.block_name}"
-            template = _compile_block(
-                block,
-                name=name,
-                params=params,
-                step=_WORKFLOW_STEP,
-                where=f"pipeline {pipeline.name!r}, {field} block {block.block_name!r}",
-            )
-            handler_templates.append(template)
-            # No continueOn: a failing handler is unexpected and fails the pipeline, which is
-            # Argo's default for onExit (verified on 4.1.6).
-            tasks.append(Task(name=name, template=template, when=when))
+    templates = []
+    for field in fields:
+        outcomes = _HANDLER_OUTCOMES[field]
+        kind = field.rstrip("_").replace("_", "-")
+        for handler in getattr(owner, field):
+            for outcome in outcomes:
+                key = f"{kind}-{handler.block_name}"
+                if len(outcomes) > 1:
+                    key += f"-{outcome}"
+                template = _compile_block(
+                    handler,
+                    name=f"{prefix}{key}",
+                    params=params,
+                    where=f"{where}, {field} block {handler.block_name!r}",
+                    step=step_context(outcome),
+                )
+                templates.append(template)
+                when = _CONDITIONS[outcome].format(status=status)
+                tasks.append(Task(name=key, template=template, when=when))
     if not tasks:
         return []
-    return [DAG(name=EXIT_HANDLER, tasks=tasks), *handler_templates]
+    inputs = [Parameter(name=_STATUS_INPUT)] if "inputs.parameters" in status else None
+    return [DAG(name=dag_name, inputs=inputs, tasks=tasks), *templates]
 
 
 def _compile_block(
@@ -113,10 +203,19 @@ def _compile_block(
     step: Mapping[str, str] | None = None,
 ):
     try:
-        template = lower_model(block, params, step).compile()
+        template = lower_model(block, params, step, exclude=HANDLER_FIELDS).compile()
     except CompileError as e:
         raise CompileError(f"{where}: {e}") from e
     return dataclasses.replace(template, name=name)
+
+
+def _lower_when(when: str | None, params: set[str], where: str) -> str | None:
+    if when is None:
+        return None
+    try:
+        return lower(when, params, quote_params=True)
+    except CompileError as e:
+        raise CompileError(f"{where}: when: {e}") from e
 
 
 def _check_unique_template_names(pipeline: Pipeline, templates) -> None:

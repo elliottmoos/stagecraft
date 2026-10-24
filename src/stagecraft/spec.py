@@ -67,7 +67,38 @@ class Param(_Model):
         return self
 
 
-class Block(_Model):
+HANDLER_FIELDS = ("on_success", "on_failure", "finally_")
+
+
+class _Step(_Model):
+    """What blocks and stages share: a condition, and handlers that run after the step finishes.
+
+    `when` is an Argo condition. Inside it `{{ param.x }}` is a quoted string, so compare it with
+    quoted values: `when="{{ param.deploy }} == 'true'"`.
+
+    Handlers are ordinary blocks run from the step's Argo `exit` hook. `on_success` runs when the
+    step succeeds, `on_failure` when it fails or errors, `finally_` in both cases; none run when
+    `when` skips the step. In handlers, `{{ step.name }}` is the step's path ("stage" or
+    "stage/block") and `{{ step.status }}` is "Succeeded" or "Failed". A failing handler is shown
+    in the Argo UI but, unlike a pipeline-level handler, does not fail the pipeline (an Argo
+    limitation).
+    """
+
+    when: str | None = None
+    on_success: list["Block"] = []
+    on_failure: list["Block"] = []
+    finally_: list["Block"] = []
+
+    def _label(self) -> str:
+        raise NotImplementedError
+
+    @model_validator(mode="after")
+    def _check_handlers(self) -> Self:
+        _check_handlers(self._label(), self, HANDLER_FIELDS)
+        return self
+
+
+class Block(_Step):
     """Base type for blocks. A subclass declares its fields and compiles to one Hera template.
 
     String fields may contain placeholders such as `{{ param.repo }}`; the compiler lowers them
@@ -80,11 +111,14 @@ class Block(_Model):
     def block_name(self) -> str:
         return self.name or _kebab(type(self).__name__)
 
+    def _label(self) -> str:
+        return f"block {self.block_name!r}"
+
     @abstractmethod
     def compile(self) -> Container | Script: ...
 
 
-class Stage(_Model):
+class Stage(_Step):
     """An ordered step of a pipeline. Its blocks run in parallel."""
 
     name: Name
@@ -92,6 +126,9 @@ class Stage(_Model):
 
     def __init__(self, name: str, blocks: list[Block], /, **data) -> None:
         super().__init__(name=name, blocks=blocks, **data)
+
+    def _label(self) -> str:
+        return f"stage {self.name!r}"
 
     @model_validator(mode="after")
     def _check_block_names(self) -> Self:
@@ -108,6 +145,18 @@ def _check_block_names(where: str, blocks: list[Block]) -> None:
             f"{where}: duplicate block name {dupes[0]!r}; "
             "give blocks of the same type a distinct name="
         )
+
+
+def _check_handlers(where: str, owner: BaseModel, fields: tuple[str, ...]) -> None:
+    for field in fields:
+        handlers: list[Block] = getattr(owner, field)
+        _check_block_names(f"{where} {field}", handlers)
+        for handler in handlers:
+            if handler.when is not None or any(getattr(handler, f) for f in HANDLER_FIELDS):
+                raise ValueError(
+                    f"{where} {field}: block {handler.block_name!r}: "
+                    "handler blocks cannot set when or handlers"
+                )
 
 
 class Pipeline(_Model):
@@ -130,6 +179,5 @@ class Pipeline(_Model):
             raise ValueError(f"pipeline {self.name!r}: duplicate stage name {dupes[0]!r}")
         if dupes := _duplicates([p.name for p in self.params]):
             raise ValueError(f"pipeline {self.name!r}: duplicate param name {dupes[0]!r}")
-        _check_block_names(f"pipeline {self.name!r} on_success", self.on_success)
-        _check_block_names(f"pipeline {self.name!r} on_failure", self.on_failure)
+        _check_handlers(f"pipeline {self.name!r}", self, ("on_success", "on_failure"))
         return self

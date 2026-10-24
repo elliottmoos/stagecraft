@@ -42,6 +42,7 @@ def test_render_accepts_a_directory(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == [
         "escaping.yaml",
         "handlers-ci.yaml",
+        "hooks-ci.yaml",
         "smoke-ci.yaml",
     ]
 

@@ -42,7 +42,7 @@ spec:
         when: '{{`{{workflow.status}}`}} == Succeeded'
       - name: on-failure-notify
         template: on-failure-notify
-        when: '{{`{{workflow.status}}`}} != Succeeded'
+        when: '{{`{{workflow.status}}`}} == Failed || {{`{{workflow.status}}`}} == Error'
     name: on-exit
   - container:
       args:

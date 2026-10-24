@@ -37,6 +37,16 @@ Facts confirmed by experiment or by `tests/integration`. Re-check them when bump
 - A failing `onExit` task turns a Succeeded workflow into Failed. Stagecraft keeps that default
   on purpose: handler failures are unexpected and should fail the build. (`continueOn` would
   keep the result while still showing the handler as Failed.)
+- Task hooks: an expression hook on a **sub-DAG** task never fires if another task depends on
+  it (pod tasks are fine). A task's `exit` hook always fires, and its arguments can read
+  `{{tasks.<name>.status}}`, which expression-hook arguments can't for sub-DAG tasks. Hence
+  stage and block handlers run from one `exit` hook calling a `when`-guarded handler DAG.
+  `{{tasks.<name>.exitCode}}` doesn't resolve in hook arguments.
+- A failing task hook (`exit` or expression) does **not** fail the workflow. Accepted for stage
+  and block handlers; pipeline handlers (onExit) do fail it.
+- A task skipped by `when` fires none of its handlers.
+- `when` parses bare words: `true == 'true'` is false (boolean vs string). Stagecraft quotes
+  param placeholders inside `when`.
 - `argo stop` runs exit handlers with `{{workflow.status}} == Failed`.
 - `argo terminate` runs **no** exit handlers, so a terminated run can leave commit statuses
   pending. Accepted: builds are rarely terminated, and re-running the workflow updates the
