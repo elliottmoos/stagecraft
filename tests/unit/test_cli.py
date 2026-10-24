@@ -5,6 +5,7 @@ from typer.testing import CliRunner
 
 from stagecraft.cli import app
 from stagecraft.compile import compile_pipeline
+from stagecraft.graph import mermaid
 from stagecraft.serialize import serialize
 
 from fixtures.contract import CONTEXT
@@ -88,3 +89,63 @@ def test_render_reports_an_unreadable_values_schema(tmp_path):
 
     assert result.exit_code == 1
     assert "missing.json: cannot read values schema" in result.output
+
+
+def test_check_reports_ok_without_writing(tmp_path):
+    result = CliRunner().invoke(app, ["check", "fixtures/pipelines", VALUES])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == (
+        "ok: escaping, handlers-ci, hooks-ci, smoke-ci, status-ci, workspace-ci\n"
+    )
+
+
+def test_check_fails_like_render(tmp_path):
+    broken = tmp_path / "broken.py"
+    broken.write_text(BROKEN)
+
+    result = CliRunner().invoke(app, ["check", str(broken), VALUES])
+
+    assert result.exit_code == 1
+    assert "pipeline 'broken', stage 's', block 'shell': undeclared param 'nope'" in result.output
+
+
+def test_graph_prints_a_mermaid_diagram():
+    result = CliRunner().invoke(app, ["graph", "fixtures/pipelines/smoke.py"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == mermaid(smoke.pipeline)
+
+
+def test_graph_needs_a_pipeline_name_when_paths_hold_several():
+    result = CliRunner().invoke(app, ["graph", "fixtures/pipelines"])
+
+    assert result.exit_code == 1
+    assert "6 pipelines found (escaping, handlers-ci, " in result.output
+    assert "choose one with --pipeline" in result.output
+
+
+def test_graph_picks_a_pipeline_by_name():
+    result = CliRunner().invoke(app, ["graph", "fixtures/pipelines", "--pipeline", "smoke-ci"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == mermaid(smoke.pipeline)
+
+
+def test_graph_rejects_an_unknown_pipeline_name():
+    result = CliRunner().invoke(app, ["graph", "fixtures/pipelines", "--pipeline", "nope"])
+
+    assert result.exit_code == 1
+    assert "no pipeline named 'nope'" in result.output
+
+
+def test_contexts_lists_each_pipelines_status_contexts_in_order():
+    result = CliRunner().invoke(app, ["contexts", "fixtures/pipelines"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == (
+        "status-ci\tci/pipeline\n"
+        "status-ci\tci/verify\n"
+        "status-ci\tci/unit-tests\n"
+        "status-ci\tci/deploy\n"
+    )

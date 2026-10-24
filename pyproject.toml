@@ -2,7 +2,7 @@
 name = "stagecraft"
 version = "0.0.1"
 description = "Author CI/CD pipelines as stages of blocks and compile them to Helm-compatible Argo Workflows templates."
-readme = "DESIGN.md"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     # Hera is pinned exactly: its API and generated models change between releases.

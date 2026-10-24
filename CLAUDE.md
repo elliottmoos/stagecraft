@@ -3,6 +3,8 @@
 Python framework and CLI that compiles CI/CD pipelines (ordered stages of parallel blocks) into
 Helm-compatible Argo Workflows `WorkflowTemplate` and `CronWorkflow` manifests, using Hera as the
 compiler. `DESIGN.md` is the spec; read the relevant section before changing behavior.
+`README.md` is the user guide; keep it in step with behavior changes (`tests/unit/test_readme.py`
+compiles its examples).
 
 ## Pinned versions
 
@@ -77,6 +79,9 @@ uv run pytest --snapshot-update          # accept snapshot changes (review the d
 uv run ruff check . && uv run ruff format --check .
 
 uv run stagecraft render <pipeline files or dirs> --values-schema <chart>/values.schema.json --out <dir>
+uv run stagecraft check <pipeline files or dirs> --values-schema <chart>/values.schema.json
+uv run stagecraft graph <pipeline files or dirs> [--pipeline <name>]   # Mermaid
+uv run stagecraft contexts <pipeline files or dirs>
 
 ./scripts/kind-up.sh                     # kind cluster "stagecraft" + Argo (version from ARGO_VERSION)
 kind delete cluster --name stagecraft

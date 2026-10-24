@@ -51,9 +51,9 @@ Four layers:
 
 CLI:
 - `stagecraft render <pipelines> --values-schema <path> --out <dir>`: compile, validate against the contract, write templates.
-- `stagecraft check`: composition and contract validation without writing files.
-- `stagecraft graph`: Mermaid diagram of a pipeline.
-- `stagecraft contexts`: list commit-status contexts (for branch protection setup).
+- `stagecraft check <pipelines> --values-schema <path>`: the same compilation and contract validation as `render`, without writing files.
+- `stagecraft graph <pipelines> [--pipeline <name>]`: Mermaid diagram of a pipeline as authored (stages, blocks, `when`, statuses, workspace access, handlers), not of the compiled Argo templates. Labels are escaped with Mermaid entity codes; node ids are generated, so names like `end` are safe.
+- `stagecraft contexts <pipelines>`: list commit-status contexts as `<pipeline><TAB><context>` lines, in pipeline order (for branch protection setup).
 
 Linting rendered output uses standard tools (`argo lint`, kubeconform), not reimplemented here.
 
