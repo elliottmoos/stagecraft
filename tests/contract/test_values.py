@@ -14,7 +14,7 @@ from fixtures.contract import CONTEXT
 
 SCHEMA = {
     "type": "object",
-    "required": ["a", "obj", "nullable", "choice", "loose", "bad-key"],
+    "required": ["a", "obj", "nullable", "choice", "loose", "bad-key", "mixed"],
     "properties": {
         "a": {
             "type": "object",
@@ -31,6 +31,7 @@ SCHEMA = {
         "choice": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
         "loose": {"type": "object", "additionalProperties": True, "properties": {}},
         "bad-key": {"type": "string"},
+        "mixed": {"type": ["string", "integer"]},
     },
     "$defs": {"flag": {"type": "boolean"}},
 }
@@ -44,8 +45,13 @@ def test_valid_reference_returns_a_marker_for_the_full_path():
     assert context().value("a.s", str) == "<<values:a.s>>"
 
 
+def test_non_string_scalars_are_marked_for_json_rendering():
+    # Helm's `quote` prints large numbers in exponent notation ("1e+06"); `toJson` doesn't.
+    assert context().value("a.n", int) == "<<values:a.n|json>>"
+
+
 def test_local_refs_are_followed():
-    assert context().value("a.ref", bool) == "<<values:a.ref>>"
+    assert context().value("a.ref", bool) == "<<values:a.ref|json>>"
 
 
 def test_prefix_is_prepended_to_lookups_and_expressions():
@@ -77,6 +83,11 @@ def test_wrong_type_fails():
 def test_objects_cannot_be_used_as_scalars():
     with pytest.raises(CompileError, match=r"'obj' is object .* used as a scalar"):
         context().value("obj")
+
+
+def test_scalars_mixing_string_with_other_types_fail():
+    with pytest.raises(CompileError, match="'mixed' mixes string with other types"):
+        context().value("mixed")
 
 
 def test_nullable_values_fail():
@@ -130,6 +141,26 @@ def test_placeholder_in_a_string_renders_a_helm_splice():
         '- "notify {{ .Values.notify.channel | quote | trimPrefix "\\"" | trimSuffix "\\"" }}"'
         in rendered
     )
+
+
+def test_number_inside_a_string_renders_as_json():
+    pipeline = Pipeline(
+        name="p", stages=[Stage("s", [Shell(script="retry {{ values.strings.retries }}")])]
+    )
+
+    rendered = serialize(compile_pipeline(pipeline, CONTEXT))
+
+    assert '- "retry {{ .Values.strings.retries | toJson }}"' in rendered
+
+
+def test_whole_number_field_renders_as_a_quoted_json_number():
+    pipeline = Pipeline(
+        name="p", stages=[Stage("s", [Shell(script="{{ values.strings.retries }}")])]
+    )
+
+    rendered = serialize(compile_pipeline(pipeline, CONTEXT))
+
+    assert "- {{ .Values.strings.retries | toJson | quote }}" in rendered
 
 
 def test_whole_field_reference_renders_quoted_helm_value():

@@ -23,6 +23,8 @@ spec:
         template: only-values
       - name: whole
         template: only-whole
+      - name: whole-number
+        template: only-whole-number
     name: only
   - container:
       args:
@@ -42,7 +44,7 @@ spec:
     name: only-exprs
   - container:
       args:
-      - "echo 'tricky: {{ .Values.strings.tricky | quote | trimPrefix "\"" | trimSuffix "\"" }}'\necho \"retries={{ .Values.strings.retries | quote | trimPrefix "\"" | trimSuffix "\"" }} debug={{ .Values.strings.debug | quote | trimPrefix "\"" | trimSuffix "\"" }} {{`{{workflow.name}}`}}\"\n"
+      - "echo 'tricky: {{ .Values.strings.tricky | quote | trimPrefix "\"" | trimSuffix "\"" }}'\necho \"retries={{ .Values.strings.retries | toJson }} debug={{ .Values.strings.debug | toJson }} {{`{{workflow.name}}`}}\"\necho \"big={{ .Values.strings.big | toJson }}\"\n"
       command:
       - sh
       - -c
@@ -56,3 +58,11 @@ spec:
       - -c
       image: {{ .Values.images.shell | quote }}
     name: only-whole
+  - container:
+      args:
+      - {{ .Values.strings.big | toJson | quote }}
+      command:
+      - sh
+      - -c
+      image: {{ .Values.images.shell | quote }}
+    name: only-whole-number

@@ -1,8 +1,9 @@
 """CompileContext: the one object the compiler passes to every block. See DESIGN.md section 8.
 
 Blocks get Helm values only through `CompileContext.value`, never by writing Helm syntax. A value
-reference is returned as a marker string, so it fits any field a block builds; the serializer
-turns markers into Helm expressions after escaping Argo expressions.
+reference is returned as a marker string, so it fits any string field a block builds; the
+serializer turns markers into Helm expressions after escaping Argo expressions. A marker records
+whether the value is a string or another scalar, which Helm must print with `toJson`.
 """
 
 import re
@@ -11,7 +12,8 @@ from dataclasses import dataclass
 from stagecraft.contract import ValuesContract
 from stagecraft.errors import CompileError
 
-VALUE_MARKER = re.compile(r"<<values:([A-Za-z0-9_.]+)>>")
+# <<values:a.b>> for a string, <<values:a.b|json>> for a number or boolean.
+VALUE_MARKER = re.compile(r"<<values:([A-Za-z0-9_.]+)(\|json)?>>")
 
 _SCALARS = {"string", "integer", "number", "boolean"}
 _EXPECTED = {
@@ -48,4 +50,9 @@ class CompileContext:
             raise CompileError(
                 f"value {full!r} is {declared} in the values schema, but is used as {usage}"
             )
-        return f"<<values:{full}>>"
+        if "string" in types and len(types) > 1:
+            raise CompileError(
+                f"value {full!r} mixes string with other types in the values schema; "
+                "give it a single type"
+            )
+        return f"<<values:{full}>>" if types == {"string"} else f"<<values:{full}|json>>"

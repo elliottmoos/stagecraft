@@ -22,11 +22,12 @@
     "strings": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tricky", "retries", "debug"],
+      "required": ["tricky", "retries", "debug", "big"],
       "properties": {
         "tricky": {"type": "string"},
         "retries": {"type": "integer"},
-        "debug": {"type": "boolean"}
+        "debug": {"type": "boolean"},
+        "big": {"type": "integer"}
       }
     }
   },

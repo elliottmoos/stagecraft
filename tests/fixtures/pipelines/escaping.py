@@ -19,6 +19,7 @@ echo "helm-looking text that is not an expression: .Values.x"
 VALUES_SCRIPT = """\
 echo 'tricky: {{ values.strings.tricky }}'
 echo "retries={{ values.strings.retries }} debug={{ values.strings.debug }} {{workflow.name}}"
+echo "big={{ values.strings.big }}"
 """
 
 pipeline = Pipeline(
@@ -31,6 +32,7 @@ pipeline = Pipeline(
                 Shell(name="exprs", script=SCRIPT),
                 Shell(name="values", script=VALUES_SCRIPT),
                 Shell(name="whole", script="{{ values.strings.tricky }}"),
+                Shell(name="whole-number", script="{{ values.strings.big }}"),
             ],
         )
     ],

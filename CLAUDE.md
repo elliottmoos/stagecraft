@@ -105,10 +105,12 @@ that way so tests never touch the user's current kube context.
 - The compile layer stays pure: no I/O, no env reads, no globals.
 - Blocks get values only through `ctx.value(path, type)` in `Block.compile(ctx)`, or through
   `{{ values.a.b }}` placeholders in their fields. Both return a marker string that the serializer
-  turns into `{{ .Values.a.b | quote }}`. Secrets are value-referenced names (for example
+  turns into `{{ .Values.a.b | quote }}` (strings) or `{{ .Values.a.b | toJson | quote }}`
+  (numbers and booleans: Helm's `quote` prints 1000000 as "1e+06"). Secrets are value-referenced names (for example
   `SecretEnv(secret_name=ctx.value(...))`), never contents.
-- Only required, non-null, scalar values can be referenced (decided 2026-10-23). Structured values
-  (objects, arrays) are slice 8; typed block inputs/outputs wait until a pipeline needs them.
+- Only required, non-null, single-typed scalar values can be referenced (decided 2026-10-23).
+  Structured values (objects, arrays) and typed block inputs/outputs wait until a block needs them
+  (decided 2026-10-24).
 - Blocks never emit Helm syntax. Only the serializer does, and it escapes all Argo expressions in
   one pass.
 - A reference to a value missing from the contract, or of the wrong type, must fail rendering.

@@ -7,3 +7,5 @@ strings:
   tricky: 'a: "b" # c \ d'
   retries: 3
   debug: true
+  # Helm's `quote` would print this as "1.2345678901e+10".
+  big: 12345678901
