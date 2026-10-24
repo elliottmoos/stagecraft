@@ -22,23 +22,44 @@ Hera 6+ core classes are dataclasses (not Pydantic), the decorator API is gone, 
 how wrapped Argo expressions are written in YAML output. Read the docs and source for the pinned
 release (https://github.com/argoproj-labs/hera/tree/7.1.0) instead of relying on older examples.
 
+Hera pitfalls found so far:
+- Passing `None` explicitly to a model field can serialize as the string `"null"` (seen with
+  `Parameter(value=None)`). Omit unset fields instead.
+- The compiler builds Hera objects explicitly (`DAG(tasks=[...])`, `WorkflowTemplate(templates=[...])`)
+  and never uses Hera's `with` contexts, which keep module-level state.
+
 ## Commands
 
 ```sh
 uv sync                                  # install
-uv run pytest                            # unit, contract, snapshot tests
-uv run pytest -m integration             # behavior tests; needs a kind cluster with Argo installed
+uv run pytest                            # unit, snapshot, and static validation (helm/argo/kubeconform)
+uv run pytest -m integration             # behavior tests on kind (run scripts/kind-up.sh first)
 uv run pytest --snapshot-update          # accept snapshot changes (review the diff)
 uv run ruff check . && uv run ruff format --check .
 
-# Static validation of rendered output (fixture chart lives in tests/fixtures/chart)
-helm template fixture tests/fixtures/chart > out/rendered.yaml
+uv run stagecraft render <pipeline files or dirs> --out <dir>
+
+./scripts/kind-up.sh                     # kind cluster "stagecraft" + Argo (version from ARGO_VERSION)
+kind delete cluster --name stagecraft
+
+# Regenerate kubeconform schemas when bumping Argo (also updates ARGO_VERSION)
+uv run python scripts/gen_crd_schemas.py <argo-version> tests/fixtures/crd-schemas
+```
+
+`tests/snapshots/test_rendered.py` renders each fixture pipeline into a temporary copy of the
+fixture chart and runs `helm template`, `argo lint --offline`, and kubeconform on the result. By
+hand:
+
+```sh
+helm template fixture <chart> > out/rendered.yaml
 argo lint --offline out/rendered.yaml
-kubeconform -strict -summary \
-  -schema-location default \
+kubeconform -strict -summary -schema-location default \
   -schema-location 'tests/fixtures/crd-schemas/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
   out/rendered.yaml
 ```
+
+Integration tests pass `--context kind-stagecraft` to every kubectl, helm, and argo call. Keep it
+that way so tests never touch the user's current kube context.
 
 ## Rules
 

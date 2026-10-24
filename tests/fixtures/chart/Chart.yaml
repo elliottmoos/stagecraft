@@ -1,0 +1,6 @@
+# Test-only fixture chart. Never published. Rendered templates are written into a temporary
+# copy of this chart by the tests; templates/ stays empty here.
+apiVersion: v2
+name: stagecraft-fixture
+version: 0.0.0
+type: application

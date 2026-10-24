@@ -29,7 +29,9 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--strict-markers", "-ra", "--import-mode=importlib"]
+pythonpath = ["tests"]
+# Integration tests are opt-in: `uv run pytest -m integration` (the last -m wins).
+addopts = ["--strict-markers", "-ra", "--import-mode=importlib", "-m", "not integration"]
 markers = [
     "integration: needs a kind cluster with Argo Workflows installed (slow)",
 ]
@@ -44,3 +46,7 @@ exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+# Test helper packages importable through pytest's pythonpath = ["tests"].
+known-local-folder = ["fixtures", "support"]
