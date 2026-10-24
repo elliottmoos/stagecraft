@@ -2,5 +2,35 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "properties": {}
+  "required": ["images", "notify", "strings"],
+  "properties": {
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shell"],
+      "properties": {"shell": {"$ref": "#/$defs/image"}}
+    },
+    "notify": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel"],
+      "properties": {
+        "channel": {"type": "string"},
+        "alertChannel": {"type": "string"}
+      }
+    },
+    "strings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tricky", "retries", "debug"],
+      "properties": {
+        "tricky": {"type": "string"},
+        "retries": {"type": "integer"},
+        "debug": {"type": "boolean"}
+      }
+    }
+  },
+  "$defs": {
+    "image": {"type": "string"}
+  }
 }

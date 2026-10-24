@@ -9,8 +9,11 @@ import pytest
 import yaml
 
 from stagecraft.compile import compile_pipeline
+from stagecraft.context import VALUE_MARKER
 from stagecraft.serialize import serialize
 from stagecraft.spec import Pipeline
+
+from fixtures.contract import CONTEXT
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FIXTURE_CHART = FIXTURES / "chart"
@@ -40,7 +43,7 @@ def build_chart(tmp_path: Path, pipelines: list[Pipeline]) -> Path:
     shutil.copytree(FIXTURE_CHART, chart)
     for pipeline in pipelines:
         (chart / "templates" / f"{pipeline.name}.yaml").write_text(
-            serialize(compile_pipeline(pipeline))
+            serialize(compile_pipeline(pipeline, CONTEXT))
         )
     return chart
 
@@ -50,6 +53,27 @@ def helm_template(chart: Path, out: Path) -> list[dict]:
     rendered = run(require_tool("helm"), "template", "fixture", str(chart))
     out.write_text(rendered)
     return [doc for doc in yaml.safe_load_all(rendered) if doc]
+
+
+def with_fixture_values(node):
+    """`node` with value markers replaced by the fixture chart's values, as Helm renders them
+    (`quote` stringifies: booleans as true/false)."""
+    values = yaml.safe_load((FIXTURE_CHART / "values.yaml").read_text())
+
+    def lookup(match) -> str:
+        value = values
+        for key in match[1].split("."):
+            value = value[key]
+        return str(value).lower() if isinstance(value, bool) else str(value)
+
+    def walk(n):
+        if isinstance(n, dict):
+            return {k: walk(v) for k, v in n.items()}
+        if isinstance(n, list):
+            return [walk(v) for v in n]
+        return VALUE_MARKER.sub(lookup, n) if isinstance(n, str) else n
+
+    return walk(node)
 
 
 def nodes_by_name(workflow: dict) -> dict[str, dict]:

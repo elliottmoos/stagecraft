@@ -19,6 +19,10 @@ spec:
       tasks:
       - name: exprs
         template: only-exprs
+      - name: values
+        template: only-values
+      - name: whole
+        template: only-whole
     name: only
   - container:
       args:
@@ -34,5 +38,21 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: only-exprs
+  - container:
+      args:
+      - "echo 'tricky: {{ .Values.strings.tricky | quote | trimPrefix "\"" | trimSuffix "\"" }}'\necho \"retries={{ .Values.strings.retries | quote | trimPrefix "\"" | trimSuffix "\"" }} debug={{ .Values.strings.debug | quote | trimPrefix "\"" | trimSuffix "\"" }} {{`{{workflow.name}}`}}\"\n"
+      command:
+      - sh
+      - -c
+      image: {{ .Values.images.shell | quote }}
+    name: only-values
+  - container:
+      args:
+      - {{ .Values.strings.tricky | quote }}
+      command:
+      - sh
+      - -c
+      image: {{ .Values.images.shell | quote }}
+    name: only-whole

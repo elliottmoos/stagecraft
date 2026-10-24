@@ -1,4 +1,5 @@
-"""Argo expressions in awkward places, to prove they survive `helm template` unchanged."""
+"""Argo expressions and Helm values in awkward places, to prove `helm template` renders them
+exactly. strings.tricky holds characters that break YAML if spliced in unescaped."""
 
 from stagecraft.spec import Param, Pipeline, Stage
 
@@ -15,8 +16,22 @@ echo "shell backticks: `date +%Y`"
 echo "helm-looking text that is not an expression: .Values.x"
 """
 
+VALUES_SCRIPT = """\
+echo 'tricky: {{ values.strings.tricky }}'
+echo "retries={{ values.strings.retries }} debug={{ values.strings.debug }} {{workflow.name}}"
+"""
+
 pipeline = Pipeline(
     name="escaping",
     params=[Param("repo", default="example/repo")],
-    stages=[Stage("only", [Shell(name="exprs", script=SCRIPT)])],
+    stages=[
+        Stage(
+            "only",
+            [
+                Shell(name="exprs", script=SCRIPT),
+                Shell(name="values", script=VALUES_SCRIPT),
+                Shell(name="whole", script="{{ values.strings.tricky }}"),
+            ],
+        )
+    ],
 )

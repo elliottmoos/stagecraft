@@ -6,8 +6,16 @@ from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 from stagecraft.compile import compile_pipeline
 from stagecraft.serialize import serialize
 
+from fixtures.contract import CONTEXT
 from fixtures.pipelines import escaping, handlers, hooks, smoke, status
-from support import CRD_SCHEMAS, build_chart, helm_template, require_tool, run
+from support import (
+    CRD_SCHEMAS,
+    build_chart,
+    helm_template,
+    require_tool,
+    run,
+    with_fixture_values,
+)
 
 PIPELINES = [
     smoke.pipeline,
@@ -37,13 +45,13 @@ def helm_output(pipeline, tmp_path):
 
 
 def test_rendered_template_matches_snapshot(pipeline, snapshot):
-    assert serialize(compile_pipeline(pipeline)) == snapshot(extension_class=YAMLSnapshot)
+    assert serialize(compile_pipeline(pipeline, CONTEXT)) == snapshot(extension_class=YAMLSnapshot)
 
 
 def test_helm_template_reproduces_the_compiled_manifest(pipeline, helm_output):
     _, docs = helm_output
 
-    assert docs == [compile_pipeline(pipeline).to_dict()]
+    assert docs == [with_fixture_values(compile_pipeline(pipeline, CONTEXT).to_dict())]
 
 
 def test_argo_lint_accepts_helm_output(helm_output):

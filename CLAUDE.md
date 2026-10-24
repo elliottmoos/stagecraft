@@ -69,7 +69,7 @@ uv run pytest -m integration             # behavior tests on kind (run scripts/k
 uv run pytest --snapshot-update          # accept snapshot changes (review the diff)
 uv run ruff check . && uv run ruff format --check .
 
-uv run stagecraft render <pipeline files or dirs> --out <dir>
+uv run stagecraft render <pipeline files or dirs> --values-schema <chart>/values.schema.json --out <dir>
 
 ./scripts/kind-up.sh                     # kind cluster "stagecraft" + Argo (version from ARGO_VERSION)
 kind delete cluster --name stagecraft
@@ -96,8 +96,12 @@ that way so tests never touch the user's current kube context.
 ## Rules
 
 - The compile layer stays pure: no I/O, no env reads, no globals.
-- Blocks get values only through the `CompileContext`, declared with path and type. Secrets are
-  references, never contents.
+- Blocks get values only through `ctx.value(path, type)` in `Block.compile(ctx)`, or through
+  `{{ values.a.b }}` placeholders in their fields. Both return a marker string that the serializer
+  turns into `{{ .Values.a.b | quote }}`. Secrets are value-referenced names (for example
+  `SecretEnv(secret_name=ctx.value(...))`), never contents.
+- Only required, non-null, scalar values can be referenced (decided 2026-10-23). Structured values
+  (objects, arrays) are slice 8; typed block inputs/outputs wait until a pipeline needs them.
 - Blocks never emit Helm syntax. Only the serializer does, and it escapes all Argo expressions in
   one pass.
 - A reference to a value missing from the contract, or of the wrong type, must fail rendering.

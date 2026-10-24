@@ -1,7 +1,7 @@
 """Lowering of author placeholders (`{{ param.x }}`) to Argo expressions. See DESIGN.md §5."""
 
 import re
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 
 from pydantic import BaseModel
 
@@ -17,6 +17,8 @@ _SCOPED = {
 }
 
 Scopes = Mapping[str, Mapping[str, str]]
+# Resolves `{{ values.a.b }}` to a validated value reference (CompileContext.value).
+Values = Callable[[str], str]
 
 
 def lower(
@@ -24,8 +26,11 @@ def lower(
     params: Collection[str],
     scopes: Scopes | None = None,
     quote_params: bool = False,
+    values: Values | None = None,
 ) -> str:
     """Lower placeholders in `text`.
+
+    `values` resolves `{{ values.a.b }}`; it validates the path against the values contract.
 
     `scopes` maps each scoped namespace available here ("step" in handlers, "status" in the
     status reporter) to its fields and the Argo expressions that provide them.
@@ -54,7 +59,9 @@ def lower(
                     f"unknown {namespace} field {path!r}; available: {sorted(fields)}"
                 )
             return fields[path]
-        raise CompileError(f"'{{{{ {namespace}.{path} }}}}' placeholders are not supported yet")
+        if values is None:
+            raise CompileError(f"'{{{{ values.{path} }}}}' needs a values contract")
+        return values(path)
 
     return _PLACEHOLDER.sub(replace, text)
 
@@ -63,6 +70,7 @@ def lower_model[M: BaseModel](
     model: M,
     params: Collection[str],
     scopes: Scopes | None = None,
+    values: Values | None = None,
     exclude: Collection[str] = (),
 ) -> M:
     """Return a copy of `model` with placeholders lowered in every string it contains.
@@ -71,19 +79,19 @@ def lower_model[M: BaseModel](
     context).
     """
     return model.model_copy(
-        update={k: _lower_value(v, params, scopes) for k, v in model if k not in exclude}
+        update={k: _lower_value(v, params, scopes, values) for k, v in model if k not in exclude}
     )
 
 
-def _lower_value(value, params: Collection[str], scopes: Scopes | None):
+def _lower_value(value, params: Collection[str], scopes: Scopes | None, values: Values | None):
     match value:
         case str():
-            return lower(value, params, scopes)
+            return lower(value, params, scopes, values=values)
         case BaseModel():
-            return lower_model(value, params, scopes)
+            return lower_model(value, params, scopes, values)
         case list() | tuple():
-            return type(value)(_lower_value(v, params, scopes) for v in value)
+            return type(value)(_lower_value(v, params, scopes, values) for v in value)
         case dict():
-            return {k: _lower_value(v, params, scopes) for k, v in value.items()}
+            return {k: _lower_value(v, params, scopes, values) for k, v in value.items()}
         case _:
             return value

@@ -6,6 +6,7 @@ from stagecraft.errors import CompileError
 from stagecraft.spec import Pipeline, Stage
 
 from fixtures.blocks import Shell
+from fixtures.contract import CONTEXT
 from fixtures.pipelines import hooks as hooks_fixture
 
 SUCCEEDED = "{{inputs.parameters.status}} == Succeeded"
@@ -13,7 +14,7 @@ FAILED = "{{inputs.parameters.status}} == Failed || {{inputs.parameters.status}}
 
 
 def manifest(pipeline):
-    return compile_pipeline(pipeline).to_dict()
+    return compile_pipeline(pipeline, CONTEXT).to_dict()
 
 
 def template(m, name):
@@ -120,7 +121,7 @@ def test_handler_errors_name_the_full_location():
         CompileError,
         match="pipeline 'p', stage 's', block 'shell', on_failure block 'shell': undeclared",
     ):
-        compile_pipeline(pipeline)
+        compile_pipeline(pipeline, CONTEXT)
 
 
 @pytest.mark.parametrize(

@@ -2,14 +2,15 @@
 
 from hera.workflows import Container
 
+from stagecraft.context import CompileContext
 from stagecraft.spec import Block
 
 
 class Shell(Block):
-    """Runs a shell script in a small image."""
+    """Runs a shell script. The image comes from the chart's `images.shell` value."""
 
     script: str
-    image: str = "alpine:3.22"
 
-    def compile(self) -> Container:
-        return Container(image=self.image, command=["sh", "-c"], args=[self.script])
+    def compile(self, ctx: CompileContext) -> Container:
+        image = ctx.value("images.shell", str)
+        return Container(image=image, command=["sh", "-c"], args=[self.script])

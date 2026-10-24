@@ -6,11 +6,12 @@ from stagecraft.errors import CompileError
 from stagecraft.spec import Pipeline, Stage
 
 from fixtures.blocks import Shell
+from fixtures.contract import CONTEXT
 from fixtures.pipelines import handlers, smoke
 
 
 def manifest(pipeline):
-    return compile_pipeline(pipeline).to_dict()
+    return compile_pipeline(pipeline, CONTEXT).to_dict()
 
 
 def template(m, name):
@@ -65,21 +66,21 @@ def test_step_placeholders_are_rejected_outside_handlers():
     with pytest.raises(
         CompileError, match=r"stage 's', block 'shell': '\{\{ step.status }}' is only available"
     ):
-        compile_pipeline(pipeline)
+        compile_pipeline(pipeline, CONTEXT)
 
 
 def test_unknown_step_field_is_rejected():
     pipeline = pipeline_with(on_failure=[Shell(script="echo {{ step.sha }}")])
 
     with pytest.raises(CompileError, match="unknown step field 'sha'"):
-        compile_pipeline(pipeline)
+        compile_pipeline(pipeline, CONTEXT)
 
 
 def test_handler_errors_name_the_handler_list():
     pipeline = pipeline_with(on_failure=[Shell(script="echo {{ param.nope }}")])
 
     with pytest.raises(CompileError, match="pipeline 'p', on_failure block 'shell': undeclared"):
-        compile_pipeline(pipeline)
+        compile_pipeline(pipeline, CONTEXT)
 
 
 def test_handler_block_names_must_be_unique_within_a_list():

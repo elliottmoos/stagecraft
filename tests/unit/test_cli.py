@@ -7,9 +7,12 @@ from stagecraft.cli import app
 from stagecraft.compile import compile_pipeline
 from stagecraft.serialize import serialize
 
+from fixtures.contract import CONTEXT
 from fixtures.pipelines import smoke
 
 TESTS = Path(__file__).parents[1]
+# Relative to TESTS, the working directory of every test here.
+VALUES = "--values-schema=fixtures/chart/values.schema.json"
 
 BROKEN = """
 from fixtures.blocks import Shell
@@ -27,16 +30,20 @@ def in_tests_dir(monkeypatch):
 
 def test_render_writes_one_template_per_pipeline(tmp_path):
     result = CliRunner().invoke(
-        app, ["render", "fixtures/pipelines/smoke.py", "--out", str(tmp_path)]
+        app, ["render", "fixtures/pipelines/smoke.py", VALUES, "--out", str(tmp_path)]
     )
 
     assert result.exit_code == 0, result.output
     assert sorted(p.name for p in tmp_path.iterdir()) == ["smoke-ci.yaml"]
-    assert (tmp_path / "smoke-ci.yaml").read_text() == serialize(compile_pipeline(smoke.pipeline))
+    assert (tmp_path / "smoke-ci.yaml").read_text() == serialize(
+        compile_pipeline(smoke.pipeline, CONTEXT)
+    )
 
 
 def test_render_accepts_a_directory(tmp_path):
-    result = CliRunner().invoke(app, ["render", "fixtures/pipelines", "--out", str(tmp_path)])
+    result = CliRunner().invoke(
+        app, ["render", "fixtures/pipelines", VALUES, "--out", str(tmp_path)]
+    )
 
     assert result.exit_code == 0, result.output
     assert sorted(p.name for p in tmp_path.iterdir()) == [
@@ -54,7 +61,7 @@ def test_render_writes_nothing_when_any_pipeline_fails(tmp_path):
     out = tmp_path / "out"
 
     result = CliRunner().invoke(
-        app, ["render", "fixtures/pipelines/smoke.py", str(broken), "--out", str(out)]
+        app, ["render", "fixtures/pipelines/smoke.py", str(broken), VALUES, "--out", str(out)]
     )
 
     assert result.exit_code == 1
@@ -66,7 +73,17 @@ def test_render_rejects_files_without_pipelines(tmp_path):
     empty = tmp_path / "empty.py"
     empty.write_text("x = 1\n")
 
-    result = CliRunner().invoke(app, ["render", str(empty), "--out", str(tmp_path / "out")])
+    result = CliRunner().invoke(app, ["render", str(empty), VALUES, "--out", str(tmp_path / "out")])
 
     assert result.exit_code == 1
     assert "no Pipeline found" in result.output
+
+
+def test_render_reports_an_unreadable_values_schema(tmp_path):
+    result = CliRunner().invoke(
+        app,
+        ["render", "fixtures/pipelines/smoke.py", "--values-schema=missing.json", "--out", "x"],
+    )
+
+    assert result.exit_code == 1
+    assert "missing.json: cannot read values schema" in result.output

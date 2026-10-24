@@ -35,3 +35,12 @@ def test_failing_block_fails_the_workflow(run_block):
 
     assert workflow["status"]["phase"] == "Failed"
     assert nodes_by_name(workflow)["fail"]["phase"] == "Failed"
+
+
+def test_helm_values_reach_the_block(run_block):
+    # The fixture chart's values.yaml sets notify.channel to "#ci-builds".
+    workflow = run_block(
+        Shell(name="check", script='test "{{ values.notify.channel }}" = "#ci-builds"')
+    )
+
+    assert workflow["status"]["phase"] == "Succeeded"

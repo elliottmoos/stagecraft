@@ -12,6 +12,7 @@ from hera.workflows.models import Arguments, ContinueOn, LifecycleHook
 from hera.workflows.models import Parameter as ParameterModel
 
 from stagecraft.compile.placeholders import Scopes, lower, lower_model
+from stagecraft.context import CompileContext
 from stagecraft.errors import CompileError
 from stagecraft.spec import HANDLER_FIELDS, Block, Param, Pipeline, Stage
 
@@ -52,15 +53,16 @@ _FINAL_STATES = [("Succeeded", "success"), ("Failed", "failure"), ("Error", "err
 _BEST_EFFORT = ContinueOn(failed=True, error=True)
 
 
-def compile_pipeline(pipeline: Pipeline) -> WorkflowTemplate:
+def compile_pipeline(pipeline: Pipeline, ctx: CompileContext) -> WorkflowTemplate:
     """Compile a pipeline to a WorkflowTemplate.
 
     Each stage becomes a sub-DAG template of parallel block tasks, invoked as one task in the
     entrypoint DAG. Stage N depends on stage N-1, one edge per stage. Stage and block handlers run
     from task `exit` hooks, pipeline handlers from the workflow's `onExit`. Commit statuses are
-    report tasks around each step and in those exit handlers.
+    report tasks around each step and in those exit handlers. Helm values come from `ctx`, which
+    validates every reference against the chart's values contract.
     """
-    params = {p.name for p in pipeline.params}
+    lowering = _Lowering({p.name for p in pipeline.params}, ctx)
     templates = []
     main_tasks = []
     if pipeline.status:
@@ -68,12 +70,12 @@ def compile_pipeline(pipeline: Pipeline) -> WorkflowTemplate:
     depends = None
     for stage in pipeline.stages:
         where = f"pipeline {pipeline.name!r}, stage {stage.name!r}"
-        stage_dag, block_templates = _compile_stage(pipeline, stage, params)
+        stage_dag, block_templates = _compile_stage(pipeline, stage, lowering)
         hooks, hook_templates = _compile_exit_hook(
-            stage, task=stage.name, path=stage.name, params=params, where=where
+            stage, task=stage.name, path=stage.name, lowering=lowering, where=where
         )
         templates += [stage_dag, *block_templates, *hook_templates]
-        when = _lower_when(stage.when, params, where)
+        when = _lower_when(stage.when, lowering, where)
         reports, stage_depends = _status_tasks(stage, stage.name, depends=depends, when=when)
         main_tasks += reports
         main_tasks.append(
@@ -82,9 +84,9 @@ def compile_pipeline(pipeline: Pipeline) -> WorkflowTemplate:
         depends = stage.name
     templates.insert(0, DAG(name=ENTRYPOINT, tasks=main_tasks))
     if pipeline.status_contexts:
-        templates[1:1] = _compile_status_reporter(pipeline, params)
+        templates[1:1] = _compile_status_reporter(pipeline, lowering)
 
-    exit_handler = _compile_exit_handler(pipeline, params)
+    exit_handler = _compile_exit_handler(pipeline, lowering)
     templates += exit_handler
     _check_unique_template_names(pipeline, templates)
 
@@ -97,28 +99,36 @@ def compile_pipeline(pipeline: Pipeline) -> WorkflowTemplate:
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class _Lowering:
+    """What lowering placeholders needs: the declared param names and the compile context."""
+
+    names: set[str]
+    ctx: CompileContext
+
+
 def _compile_param(param: Param) -> Parameter:
     # Hera serializes an explicit value=None as the string "null", so unset fields are omitted.
     fields = {"value": param.default, "enum": param.enum, "description": param.description}
     return Parameter(name=param.name, **{k: v for k, v in fields.items() if v is not None})
 
 
-def _compile_stage(pipeline: Pipeline, stage: Stage, params: set[str]):
+def _compile_stage(pipeline: Pipeline, stage: Stage, lowering: _Lowering):
     tasks = []
     templates = []
     for block in stage.blocks:
         name = f"{stage.name}-{block.block_name}"
         where = f"pipeline {pipeline.name!r}, stage {stage.name!r}, block {block.block_name!r}"
-        template = _compile_block(block, name=name, params=params, where=where)
+        template = _compile_block(block, name=name, lowering=lowering, where=where)
         hooks, hook_templates = _compile_exit_hook(
             block,
             task=block.block_name,
             path=f"{stage.name}/{block.block_name}",
-            params=params,
+            lowering=lowering,
             where=where,
         )
         templates += [template, *hook_templates]
-        when = _lower_when(block.when, params, where)
+        when = _lower_when(block.when, lowering, where)
         reports, depends = _status_tasks(block, block.block_name, depends=None, when=when)
         tasks += reports
         tasks.append(
@@ -133,7 +143,7 @@ def _compile_stage(pipeline: Pipeline, stage: Stage, params: set[str]):
     return DAG(name=stage.name, tasks=tasks), templates
 
 
-def _compile_exit_hook(step: Block | Stage, task: str, path: str, params: set[str], where: str):
+def _compile_exit_hook(step: Block | Stage, task: str, path: str, lowering: _Lowering, where: str):
     """An `exit` hook running the step's handlers and final status report, plus the templates
     it needs.
 
@@ -150,7 +160,7 @@ def _compile_exit_hook(step: Block | Stage, task: str, path: str, params: set[st
         status=f"{{{{inputs.parameters.{_STATUS_INPUT}}}}}",
         step_context=lambda outcome: {"name": path, "status": _OUTCOME_STATUS[outcome]},
         report=step.status,
-        params=params,
+        lowering=lowering,
         where=where,
     )
     if not templates:
@@ -160,7 +170,7 @@ def _compile_exit_hook(step: Block | Stage, task: str, path: str, params: set[st
     return {"exit": hook}, templates
 
 
-def _compile_exit_handler(pipeline: Pipeline, params: set[str]) -> list:
+def _compile_exit_handler(pipeline: Pipeline, lowering: _Lowering) -> list:
     """The onExit DAG and its handler templates, or [] when there is nothing to run on exit.
 
     A failing handler fails the pipeline: that is Argo's default for onExit (verified on 4.1.6)
@@ -174,7 +184,7 @@ def _compile_exit_handler(pipeline: Pipeline, params: set[str]) -> list:
         status="{{workflow.status}}",
         step_context=lambda outcome: _WORKFLOW_STEP,
         report=pipeline.status,
-        params=params,
+        lowering=lowering,
         where=f"pipeline {pipeline.name!r}",
     )
 
@@ -187,7 +197,7 @@ def _compile_handler_dag(
     status: str,
     step_context: Callable[[str], Mapping[str, str]],
     report: str | None,
-    params: set[str],
+    lowering: _Lowering,
     where: str,
 ) -> list:
     """A DAG that reports the final commit status for `report` (if set) and runs `owner`'s
@@ -210,7 +220,7 @@ def _compile_handler_dag(
                 template = _compile_block(
                     handler,
                     name=f"{prefix}{key}",
-                    params=params,
+                    lowering=lowering,
                     where=f"{where}, {field} block {handler.block_name!r}",
                     scopes={"step": step_context(outcome)},
                 )
@@ -259,13 +269,13 @@ def _report(name: str, context: str, state: str, description: str, **task_fields
     )
 
 
-def _compile_status_reporter(pipeline: Pipeline, params: set[str]) -> list:
+def _compile_status_reporter(pipeline: Pipeline, lowering: _Lowering) -> list:
     """The reporter block's template and the best-effort `status-report` DAG that calls it."""
     reporter = pipeline.status_reporter
     assert reporter is not None  # guaranteed by Pipeline validation when statuses exist
     where = f"pipeline {pipeline.name!r}, status_reporter block {reporter.block_name!r}"
     template = _compile_block(
-        reporter, name=STATUS_REPORTER, params=params, where=where, scopes=_REPORT_SCOPE
+        reporter, name=STATUS_REPORTER, lowering=lowering, where=where, scopes=_REPORT_SCOPE
     )
     if template.inputs:
         raise CompileError(f"{where}: a status reporter cannot declare its own inputs")
@@ -287,22 +297,25 @@ def _compile_status_reporter(pipeline: Pipeline, params: set[str]) -> list:
 def _compile_block(
     block: Block,
     name: str,
-    params: set[str],
+    lowering: _Lowering,
     where: str,
     scopes: Scopes | None = None,
 ):
     try:
-        template = lower_model(block, params, scopes, exclude=HANDLER_FIELDS).compile()
+        lowered = lower_model(
+            block, lowering.names, scopes, lowering.ctx.value, exclude=HANDLER_FIELDS
+        )
+        template = lowered.compile(lowering.ctx)
     except CompileError as e:
         raise CompileError(f"{where}: {e}") from e
     return dataclasses.replace(template, name=name)
 
 
-def _lower_when(when: str | None, params: set[str], where: str) -> str | None:
+def _lower_when(when: str | None, lowering: _Lowering, where: str) -> str | None:
     if when is None:
         return None
     try:
-        return lower(when, params, quote_params=True)
+        return lower(when, lowering.names, quote_params=True, values=lowering.ctx.value)
     except CompileError as e:
         raise CompileError(f"{where}: when: {e}") from e
 

@@ -38,7 +38,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: prepare-clone
   - dag:
       tasks:
@@ -53,7 +53,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: verify-lint
   - container:
       args:
@@ -61,7 +61,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: verify-unit-tests
   - dag:
       tasks:
@@ -74,5 +74,5 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: package-build

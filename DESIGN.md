@@ -176,6 +176,8 @@ A strategy that cannot work without an installation-specific value is not suppor
 
 Nothing is rendered for a pipeline that fails validation.
 
+Decided: references must be **required** at every level of the schema and non-null; there are no guards or block-declared defaults. The chart owns the contract, so a value pipelines use is marked required, with its default in `values.yaml`. The resolver follows `properties`, `required`, `type`, and local `$ref`s; a path through `oneOf`, `anyOf`, `allOf`, `not`, `if`, `patternProperties`, or `dependentSchemas` fails rather than being guessed at. Keys must be identifiers so they work as `.Values.a.b`. Only scalar values (string, number, boolean) are supported for now; structured values come with the `toYaml` work (slice 8).
+
 **`CompileContext`.** The compiler passes one explicit object into every block's `compile` call. It carries the parsed values contract and mints validated value references. It exists to:
 1. Keep the compile layer pure (no env reads or globals).
 2. Let blocks request a value by path and expected type, receiving a typed handle that serializes to the right Helm expression, so blocks never emit Helm syntax.
@@ -183,7 +185,7 @@ Nothing is rendered for a pipeline that fails validation.
 
 **Helm-compatible output.**
 - Output is template files only: `WorkflowTemplate` and `CronWorkflow` manifests with Helm expressions where values are Helm-bound.
-- Argo's `{{ }}` collides with Helm's. The serializer escapes every Argo expression in one pass and emits real Helm expressions only for value references. Structured values use indentation-aware `toYaml`, and optional blocks use `with`.
+- Argo's `{{ }}` collides with Helm's. The serializer escapes every Argo expression in one pass and emits real Helm expressions only for value references, which it splices in after escaping. A field that is exactly one value renders as `{{ .Values.a.b | quote }}`; a value inside other text forces a double-quoted YAML scalar and is spliced in as `quote` with its surrounding quotes trimmed, so values containing YAML syntax cannot change the document. Structured values (planned) use indentation-aware `toYaml`; optional blocks are not needed while references are required-only.
 - The chart's values prefix, if the chart nests stagecraft-related values under a key, is a render option.
 
 ## 9. Testing strategy
@@ -258,7 +260,6 @@ Do not generalize before two or three real pipelines exist.
 
 - Where pipeline definition files live: the chart repo or a separate pipelines repo.
 - Whether the workspace strategy is always stated explicitly in the pipeline or inferred from block declarations with an override.
-- Handling of optional values in the contract: required-only references, guards, or defaults declared by the block.
 - Commit rendered templates into the chart repo, or publish them as a build artifact.
 - Template naming across multiple releases in one namespace versus stable names in the Argo UI.
 - Whether a reference block library belongs in a third package.

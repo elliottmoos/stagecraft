@@ -7,6 +7,8 @@ from typing import Annotated, Self
 from hera.workflows import Container, Script
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
+from stagecraft.context import CompileContext
+
 _DNS_LABEL = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
 _PARAM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
@@ -109,8 +111,9 @@ class _Step(_Model):
 class Block(_Step):
     """Base type for blocks. A subclass declares its fields and compiles to one Hera template.
 
-    String fields may contain placeholders such as `{{ param.repo }}`; the compiler lowers them
-    before calling `compile`. The compiler also names the returned template.
+    String fields may contain placeholders such as `{{ param.repo }}` or `{{ values.a.b }}`; the
+    compiler lowers them before calling `compile`. Inside `compile`, Helm values come only from
+    `ctx.value(path, type)`. The compiler also names the returned template.
     """
 
     name: Name | None = None
@@ -123,7 +126,7 @@ class Block(_Step):
         return f"block {self.block_name!r}"
 
     @abstractmethod
-    def compile(self) -> Container | Script: ...
+    def compile(self, ctx: CompileContext) -> Container | Script: ...
 
 
 class Stage(_Step):

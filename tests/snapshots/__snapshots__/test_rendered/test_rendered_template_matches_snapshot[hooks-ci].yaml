@@ -68,7 +68,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: verify-lint
   - dag:
       tasks:
@@ -85,7 +85,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: verify-lint-on-success-notify
   - container:
       args:
@@ -93,7 +93,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: verify-unit-tests
   - dag:
       tasks:
@@ -116,7 +116,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: verify-unit-tests-on-failure-notify
   - container:
       args:
@@ -124,7 +124,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: verify-unit-tests-finally-upload-reports-succeeded
   - container:
       args:
@@ -132,7 +132,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: verify-unit-tests-finally-upload-reports-failed
   - dag:
       tasks:
@@ -155,7 +155,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: verify-on-failure-notify
   - container:
       args:
@@ -163,7 +163,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: verify-finally-cleanup-succeeded
   - container:
       args:
@@ -171,7 +171,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: verify-finally-cleanup-failed
   - dag:
       tasks:
@@ -184,7 +184,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: deploy-staging
   - dag:
       tasks:
@@ -204,7 +204,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: deploy-finally-report-succeeded
   - container:
       args:
@@ -212,5 +212,5 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: deploy-finally-report-failed

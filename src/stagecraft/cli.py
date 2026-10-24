@@ -8,6 +8,8 @@ import typer
 
 from stagecraft import __version__
 from stagecraft.compile import compile_pipeline
+from stagecraft.context import CompileContext
+from stagecraft.contract import ValuesContract
 from stagecraft.errors import StagecraftError
 from stagecraft.loader import load_pipelines
 from stagecraft.serialize import serialize
@@ -30,13 +32,23 @@ def show_version() -> None:
 def render(
     paths: Annotated[list[Path], typer.Argument(help="Pipeline files or directories of them.")],
     out: Annotated[Path, typer.Option(help="Directory to write templates into.")],
+    values_schema: Annotated[
+        Path, typer.Option(help="The chart's values.schema.json (the values contract).")
+    ],
+    values_prefix: Annotated[
+        str, typer.Option(help="Dotted key the chart nests stagecraft values under, if any.")
+    ] = "",
 ) -> None:
     """Compile pipelines and write one template file per pipeline.
 
-    Nothing is written unless every pipeline compiles.
+    Every Helm value reference is checked against the values schema. Nothing is written unless
+    every pipeline compiles.
     """
     try:
-        rendered = {f"{p.name}.yaml": serialize(compile_pipeline(p)) for p in load_pipelines(paths)}
+        ctx = CompileContext(ValuesContract.load(values_schema, values_prefix))
+        rendered = {
+            f"{p.name}.yaml": serialize(compile_pipeline(p, ctx)) for p in load_pipelines(paths)
+        }
     except StagecraftError as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(1) from e

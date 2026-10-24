@@ -21,8 +21,14 @@ def test_undeclared_param_fails():
         lower("{{ param.nope }}", params={"repo"})
 
 
-def test_values_placeholders_fail_until_contract_validation_exists():
-    with pytest.raises(CompileError, match="not supported yet"):
+def test_values_placeholders_resolve_through_the_given_resolver():
+    assert lower("#{{ values.notify.channel }}", params=set(), values=lambda p: f"<{p}>") == (
+        "#<notify.channel>"
+    )
+
+
+def test_values_placeholders_need_a_resolver():
+    with pytest.raises(CompileError, match="needs a values contract"):
         lower("{{ values.notify.channel }}", params=set())
 
 

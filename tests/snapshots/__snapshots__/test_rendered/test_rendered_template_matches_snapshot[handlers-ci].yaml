@@ -33,7 +33,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: build-work
   - dag:
       tasks:
@@ -50,7 +50,7 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: on-success-notify
   - container:
       args:
@@ -58,5 +58,5 @@ spec:
       command:
       - sh
       - -c
-      image: alpine:3.22
+      image: {{ .Values.images.shell | quote }}
     name: on-failure-notify

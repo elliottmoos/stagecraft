@@ -1,1 +1,9 @@
-{}
+images:
+  shell: alpine:3.22
+notify:
+  channel: "#ci-builds"
+strings:
+  # Characters that would break YAML if a value were spliced in unescaped.
+  tricky: 'a: "b" # c \ d'
+  retries: 3
+  debug: true
