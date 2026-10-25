@@ -32,6 +32,16 @@ class CompileContext:
         """Reference the Helm value at `path` (dotted), used as `expected`: str, int, float, or
         bool. Raises CompileError if `path` is not a dotted identifier, is reserved, or is
         already used with another type or as an object."""
+        if path.split(".")[0] == RESERVED:
+            raise CompileError(f"value {path!r}: {RESERVED!r} is reserved for framework values")
+        return self._reference(path, expected)
+
+    def framework_value(self, path: str, expected: type = str) -> str:
+        """Reference one of Stagecraft's own values, under the reserved key. Compiler only."""
+        assert path.split(".")[0] == RESERVED, path
+        return self._reference(path, expected)
+
+    def _reference(self, path: str, expected: type) -> str:
         if expected not in SCALARS:
             raise CompileError(
                 f"value {path!r}: only scalar values (str, int, float, bool) are supported, "
@@ -42,8 +52,6 @@ class CompileContext:
                 f"value {path!r}: paths must be dotted identifiers ([A-Za-z_][A-Za-z0-9_]*), "
                 "so they work as .Values.a.b"
             )
-        if path.split(".")[0] == RESERVED:
-            raise CompileError(f"value {path!r}: {RESERVED!r} is reserved for framework values")
         known = self.references.get(path)
         if known is not None and known is not expected:
             raise CompileError(

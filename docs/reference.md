@@ -6,7 +6,7 @@ Everything in one place. The [guide](README.md) explains each item in context.
 
 | Import | What |
 |---|---|
-| `from stagecraft.spec import Pipeline, Stage, Step, Action, Param, Trigger` | The authoring models |
+| `from stagecraft.spec import Pipeline, Source, Stage, Step, Action, Param, Trigger` | The authoring models |
 | `from stagecraft.context import CompileContext` | The `ctx` passed to `Action.compile` |
 | `from stagecraft.compile import compile_pipeline, compile_triggers` | Compile in tests |
 | `from stagecraft.chart import render_chart` | The generated chart's files, by path |
@@ -19,14 +19,31 @@ Everything in one place. The [guide](README.md) explains each item in context.
 |---|---|---|---|
 | `name` | str | required | DNS label; unique among pipelines; the `WorkflowTemplate`'s name |
 | `params` | list[Param] | `[]` | Unique names |
+| `source` | Source | None | Checked out once, before the first stage, for every step |
 | `stages` | list[Stage] | required | At least one; unique names; run in order |
 | `on_success`, `on_failure` | list[Step \| Action] | `[]` | Run after the run ends; a failure here fails the run |
 | `status` | str | None | Commit-status context for the whole run |
 | `status_reporter` | Action | None | Required if anything has a status; a bare action, not a `Step` |
 | `triggers` | list[Trigger] | `[]` | Unique names |
 
-Statuses also require params `repo` and `sha`, both `required=True`. Status contexts are unique
-across the pipeline.
+Statuses also require a `source`, whose commit they report on. Status contexts are unique across
+the pipeline. `source` is a reserved stage name.
+
+## `Source(url=, revision=)`
+
+| Field | Type | Notes |
+|---|---|---|
+| `url` | str | What `git fetch` takes; may use `{{ param.x }}` and `{{ values.a.b }}` |
+| `revision` | str | A commit SHA, branch, or tag, resolved to one commit at the start of the run; may use placeholders |
+
+Every step gets the checkout (shallow, with `.git`) at `/sources/main`, its working directory
+unless the action sets one, with `STAGECRAFT_SOURCE_MAIN` set to that path. Handlers and the
+status reporter get no checkout. The source step needs two Helm values:
+
+| Value | Type | Meaning |
+|---|---|---|
+| `stagecraft.sources.image` | string | An image with `git` and `sh` |
+| `stagecraft.sources.secret` | string | A Secret with `username` and `password` keys for HTTPS; optional at run time, so a public repository can name one that doesn't exist |
 
 ## `Stage(name, steps, /, ...)`
 
@@ -105,7 +122,8 @@ chart it generated (a `Chart.yaml` with the annotation).
 | Placeholder | Allowed in | Becomes |
 |---|---|---|
 | `{{ param.x }}` | action fields, `when` | `{{workflow.parameters.x}}`; quoted in `when` |
-| `{{ values.a.b }}` | action fields, `when`, trigger params | A Helm expression for `.Values.a.b` |
+| `{{ values.a.b }}` | action fields, `when`, trigger params, source fields | A Helm expression for `.Values.a.b` |
+| `{{ source.url }}`, `{{ source.revision }}`, `{{ source.sha }}` | action fields, `when`, with a `source` | The source's URL and revision as given, and the commit it resolved to; quoted in `when` |
 | `{{ step.name }}`, `{{ step.outcome }}` | handler action fields | The path (`stage` or `stage/step`), or the run's name in pipeline handlers; and `succeeded` or `failed` |
 | `{{ status.context }}`, `{{ status.state }}`, `{{ status.description }}` | `status_reporter` fields | The report being posted |
 
@@ -129,6 +147,7 @@ Values always render as strings.
 | Template | Name |
 |---|---|
 | Entrypoint DAG | `main` |
+| The source step | `source` |
 | A stage's DAG | `<stage>` |
 | A step | `<stage>-<step>` |
 | A step's handler DAG / a handler | `<stage>[-<step>]-on-exit` / `<stage>[-<step>]-<on-success\|on-failure\|finally>-<handler>[-succeeded\|-failed]` |

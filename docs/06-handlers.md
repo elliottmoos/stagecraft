@@ -197,4 +197,4 @@ handlers. Handler names must be unique within each list
 - Skipped and never-started steps run no handlers. Only pipeline handler failures fail the
   pipeline.
 
-Next: [7. Commit statuses](07-commit-statuses.md).
+Next: [7. Sources](07-sources.md).

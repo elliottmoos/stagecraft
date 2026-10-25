@@ -10,3 +10,8 @@ strings:
   debug: true
   # Helm's `quote` would print this as "1.2345678901e+10".
   big: 12345678901
+stagecraft:
+  sources:
+    image: alpine/git:2.47.2
+    # The fixture source is a public repository: this Secret doesn't exist, so no credentials.
+    secret: no-such-secret

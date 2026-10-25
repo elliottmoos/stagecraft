@@ -4,12 +4,12 @@ from pydantic import ValidationError
 from stagecraft.compile import compile_pipeline
 from stagecraft.context import CompileContext
 from stagecraft.errors import CompileError
-from stagecraft.spec import Param, Pipeline, Stage, Step
+from stagecraft.spec import Pipeline, Source, Stage, Step
 
 from fixtures.actions import Shell
 from fixtures.pipelines import status
 
-COMMIT = [Param("repo", required=True), Param("sha", required=True)]
+SOURCE = Source(url="https://example.com/repo.git", revision="main")
 
 
 def manifest(pipeline):
@@ -54,7 +54,8 @@ def test_reporter_compiles_once_with_status_inputs():
     assert reporter["container"]["args"] == [
         'echo "{{inputs.parameters.context}}={{inputs.parameters.state}}'
         " ({{inputs.parameters.description}})"
-        ' for {{workflow.parameters.repo}}@{{workflow.parameters.sha}}"'
+        " for https://github.com/octocat/Hello-World.git"
+        '@{{workflow.outputs.parameters.stagecraft-source-sha}}"'
     ]
 
 
@@ -68,8 +69,9 @@ def test_stage_reports_pending_before_it_starts():
         "state": "pending",
         "description": "Running",
     }
-    assert "depends" not in pending
-    assert main["verify"]["depends"] == "verify-status-pending"
+    # The first stage and its pending report both wait for the source step.
+    assert pending["depends"] == "source"
+    assert main["verify"]["depends"] == "source && verify-status-pending"
 
 
 def test_pending_report_shares_the_stage_depends_and_when():
@@ -136,11 +138,14 @@ def test_pipeline_status_reports_pending_at_start_and_final_from_on_exit():
 
     pending = tasks(m, "main")["pipeline-status-pending"]
     assert report_args(pending)["context"] == "ci/pipeline"
-    assert "depends" not in pending
+    assert pending["depends"] == "source"  # the commit to report on is known from then on
     assert m["spec"]["onExit"] == "on-exit"
     failure = tasks(m, "on-exit")["status-failure"]
     assert report_args(failure)["context"] == "ci/pipeline"
-    assert failure["when"] == "{{workflow.status}} == Failed"
+    assert failure["when"] == (
+        "{{workflow.status}} == Failed"
+        " && '{{workflow.outputs.parameters.stagecraft-source-sha}}' =~ '^[0-9a-f]{40}$'"
+    )
 
 
 def test_pipelines_without_statuses_are_unchanged():
@@ -162,7 +167,7 @@ def test_status_contexts_must_be_unique():
     with pytest.raises(ValidationError, match="duplicate status context 'ci/x'"):
         Pipeline(
             name="p",
-            params=COMMIT,
+            source=SOURCE,
             status="ci/x",
             status_reporter=status.REPORTER,
             stages=[Stage("s", [Shell(script="true")], status="ci/x")],
@@ -171,18 +176,7 @@ def test_status_contexts_must_be_unique():
 
 def test_statuses_need_a_reporter():
     with pytest.raises(ValidationError, match="status contexts need a status_reporter"):
-        Pipeline(name="p", params=COMMIT, status="ci/x", stages=[Stage("s", [Shell(script="")])])
-
-
-def test_statuses_need_required_repo_and_sha_params():
-    with pytest.raises(ValidationError, match="required params 'repo' and 'sha'"):
-        Pipeline(
-            name="p",
-            params=[Param("repo", required=True), Param("sha", default="HEAD")],
-            status="ci/x",
-            status_reporter=status.REPORTER,
-            stages=[Stage("s", [Shell(script="true")])],
-        )
+        Pipeline(name="p", source=SOURCE, status="ci/x", stages=[Stage("s", [Shell(script="")])])
 
 
 def test_handler_steps_cannot_report_status():

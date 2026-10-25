@@ -5,7 +5,7 @@ from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 
 from stagecraft.serialize import serialize
 
-from fixtures.pipelines import escaping, handlers, hooks, smoke, status, triggers
+from fixtures.pipelines import escaping, handlers, hooks, smoke, source, status, triggers
 from support import (
     CRD_SCHEMAS,
     build_chart,
@@ -23,6 +23,7 @@ PIPELINES = [
     hooks.pipeline,
     status.pipeline,
     triggers.pipeline,
+    source.pipeline,
 ]
 
 

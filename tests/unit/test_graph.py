@@ -1,5 +1,5 @@
 from stagecraft.graph import mermaid
-from stagecraft.spec import Param, Pipeline, Stage, Step, Trigger
+from stagecraft.spec import Param, Pipeline, Source, Stage, Step, Trigger
 
 from fixtures.actions import Shell
 
@@ -34,9 +34,8 @@ def test_labels_show_when_and_status():
         name="p",
         params=[
             Param("deploy", default="false"),
-            Param("repo", required=True),
-            Param("sha", required=True),
         ],
+        source=Source(url="https://example.com/repo.git", revision="main"),
         status="ci/p",
         status_reporter=Shell(script=""),
         stages=[
@@ -105,3 +104,19 @@ def test_triggers_point_at_the_first_stage():
         '  t0(["nightly<br/>0 2 * * * UTC"])',
         "  t0 -.-> s0",
     ]
+
+
+def test_the_source_is_checked_out_before_the_first_stage():
+    pipeline = Pipeline(
+        name="p",
+        source=Source(url="https://example.com/repo.git", revision="{{ param.rev }}"),
+        params=[Param("rev", default="main")],
+        stages=[Stage("s", [Shell(script="")])],
+        triggers=[Trigger.cron("@daily")],
+    )
+
+    lines = mermaid(pipeline).splitlines()
+
+    assert '  src[("source<br/>https://example.com/repo.git<br/>{{ param.rev }}")]' in lines
+    assert "  src --> s0" in lines
+    assert "  t0 -.-> src" in lines

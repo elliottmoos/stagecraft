@@ -66,11 +66,11 @@ pipeline = Pipeline(
     name="service-ci",
     status="ci/pipeline",
     params=[
-        Param("repo", required=True),
-        Param("sha", required=True),
+        Param("revision", default="main"),
         Param("push", default="false", enum=["true", "false"]),
         Param("deploy", default="false", enum=["true", "false"]),
     ],
+    source=Source(url="https://github.com/example/service.git", revision="{{ param.revision }}"),
     stages=[
         Stage("verify", [
             Lint(),
@@ -86,7 +86,7 @@ pipeline = Pipeline(
     on_success=[Notify(channel="{{ values.notify.channel }}")],
     on_failure=[Notify(channel="{{ values.notify.alertChannel }}", include_failures=True)],
     triggers=[Trigger.cron("0 2 * * *", name="nightly",
-                           params={"repo": "example/service", "sha": "main", "push": "true"})],
+                           params={"revision": "main", "push": "true"})],
 )
 ```
 
@@ -98,7 +98,7 @@ Rules:
   - Inside `when`, `{{ param.x }}` becomes a quoted string, so conditions compare strings (`{{ param.deploy }} == 'true'`). Argo parses bare words, so an unquoted `true == 'true'` is false.
 - Declared `Param`s, including descriptions and enums, become the Argo UI submit form.
 - Pipeline files contain no installation-specific literals. They reference Helm values by path.
-- Steps share no files: each runs in its own pod. Sources and artifacts between steps are section 16.
+- Steps share no files: each runs in its own pod, starting from its own copy of the source's checkout. Artifacts between steps are section 16.
 
 ## 6. Actions, steps, and their Argo mapping
 
@@ -110,6 +110,7 @@ An action is a unit with a typed contract, placed by a step. The framework's job
 | Value references (`ctx.value(path, type)`, `{{ values.a.b }}`) | Helm expressions, each a required, typed property of the generated values schema |
 | Secret references | `secretKeyRef` env or volume; secret names come from Helm values, never secret contents |
 | Resources, retry, timeout, service account, node selection | Template fields, whose values come from Helm values |
+| Pipeline `source` | A generated `source` task first in `main`: a shallow `git fetch` publishing the commit and checkout as global outputs; each step task gets the checkout as an input artifact (section 16) |
 | `when` (stage or step) | `when` on the task |
 | `on_failure`, `on_success`, `finally_` | One task-level `exit` hook calling a generated handler DAG, whose tasks are guarded by `when` on the step's status |
 | `status="ctx/name"` | A "pending" report task the step depends on, then the final state from the step's `exit` hook (pipeline: `onExit`), all through the pipeline's `status_reporter` action |
@@ -128,11 +129,11 @@ Handler failures: a failing pipeline handler fails the pipeline (Argo's `onExit`
 
 **Hooks.** Prefer task-level hooks over template-level hooks (template-level fires everywhere the template is used), and prefer hooks over sibling tasks with `depends: X.Failed`. Such a sibling marks the failure as handled, so the stage and the workflow succeed despite the failed step (verified on Argo 4.1.6). Use the `exit` hook rather than expression hooks: an expression hook on a sub-DAG (stage) task never fires when another task depends on it, while the `exit` hook always fires and can pass `{{tasks.<name>.status}}` to its template. A step's handlers therefore run from one `exit` hook that calls a handler DAG branching on status, the same shape as the pipeline's `onExit`. A step skipped by `when` runs no handlers.
 
-**Commit statuses.** Requirements: `sha` and `repo` are params available before any step runs (until slice 14 replaces them with the main source's resolved SHA, section 16), statuses are best-effort and must not fail the build, context names are validated as unique per pipeline, and skipped or cancelled nodes must never leave a required check stuck pending.
+**Commit statuses.** Requirements: the commit is the pipeline source's resolved SHA (slice 14, section 16), known before any report runs, statuses are best-effort and must not fail the build, context names are validated as unique per pipeline, and skipped or cancelled nodes must never leave a required check stuck pending.
 
-The API call is made by the pipeline's `status_reporter`, an ordinary action owned by the consumer or an action library (stagecraft stays host-agnostic). It reads `{{ status.context }}`, `{{ status.state }}`, and `{{ status.description }}`, and gets the commit from the `repo` and `sha` params. It is compiled once and called through a generated `status-report` DAG that runs it with `continueOn`, so a report can never fail the build.
+The API call is made by the pipeline's `status_reporter`, an ordinary action owned by the consumer or an action library (stagecraft stays host-agnostic). It reads `{{ status.context }}`, `{{ status.state }}`, and `{{ status.description }}`, and gets the commit from `{{ source.sha }}` (and the repository from `{{ source.url }}`). It is compiled once and called through a generated `status-report` DAG that runs it with `continueOn`, so a report can never fail the build.
 
-For each step with `status=`: a "pending" report task shares the step's `depends` and `when`, and the step depends on it, so pending always lands before the final state. (A `running` hook was tried: it can miss short steps on Argo 4.1.6, and a late pending would overwrite the final state.) The step's `exit` hook reports success, failure, or error. A step skipped by `when` gets a "success" report with the description "Skipped" from a sibling task with the negated condition, so a required check for a conditional stage still passes. A step that never starts because an earlier stage failed is never reported, so nothing is left pending. The pipeline's own context reports pending at start and its final state from `onExit`.
+For each step with `status=`: a "pending" report task shares the step's `depends` and `when`, and the step depends on it, so pending always lands before the final state. (A `running` hook was tried: it can miss short steps on Argo 4.1.6, and a late pending would overwrite the final state.) The step's `exit` hook reports success, failure, or error. A step skipped by `when` gets a "success" report with the description "Skipped" from a sibling task with the negated condition, so a required check for a conditional stage still passes. A step that never starts because an earlier stage failed is never reported, so nothing is left pending. The pipeline's own context reports pending once the source step has resolved the commit, and its final state from `onExit`, guarded by a `when` that the commit exists (if the source step failed, there is nothing to report on).
 
 Accepted gaps: `argo terminate` runs no exit handlers, and `argo stop` skips the exit hook of a step that was running. Either can leave a context pending; re-running the workflow updates it.
 
@@ -239,7 +240,7 @@ Section 15 lists what was deliberately left out. Do not generalize before two or
 - Hook semantics: field names, expression scope, workflow-level `running` hooks, effect of a failing hook on workflow status, behavior on skipped nodes.
 - Template-level versus task-level hook firing.
 - Argo CD sync order for CRDs versus chart contents, if Argo CD deploys the chart.
-- For section 16, on kind with its MinIO: a git input artifact checking out a commit that isn't a branch tip, at shallow depth; a global output parameter read by `onExit` and by exit hooks; artifacts routed through stage DAG outputs and inputs; an input artifact placed inside another (an artifact under the source checkout); whether a failed step's outputs are uploaded; `artifactGC` deleting objects when a workflow is deleted.
+- For section 16, on kind with its MinIO: artifacts routed through stage DAG outputs and inputs; an input artifact placed inside another (an artifact under the source checkout); whether a failed step's outputs are uploaded; `artifactGC` deleting objects when a workflow is deleted.
 
 ## 14. Open decisions
 
@@ -264,6 +265,8 @@ Left out on purpose, as of slice 10 (2026-10-24; updated for section 16 on 2026-
 | Optional action inputs | Every declared input must be bound | An action is useful both with and without an earlier step's files |
 | Artifacts for reactions and the reporter (for example, uploading a failed step's test reports) | Unverified whether a failed step's outputs are uploaded, and how exit hooks would receive them | A reaction must read a step's files; prove it on kind first |
 | Opting a step out of source injection | Every step downloads the sources; cheap from an in-cluster repository | Source download time matters for steps that don't need them |
+| SSH keys and other credential kinds for sources | HTTPS with a username and token covers GitHub | A source host needs SSH, or GitHub App tokens must be minted per run |
+| Deeper source checkouts (history for `git describe`, changed-file detection) | The checkout is one commit deep, which is all builds and tests need | A step needs history or tags |
 | Caches that outlive a run (for example a Go module cache) | A different concept: shared across runs, not handed between steps | Build times need them |
 | Multi-line scripts containing a string value as readable literal blocks (section 8) | Kept as double-quoted one-liners: correct for any value, but harder to read in diffs | Rendered templates are reviewed often enough for this to hurt |
 
@@ -272,7 +275,7 @@ Accepted gaps (Argo or Helm behavior, not missing features) are kept with the me
 
 ## 16. Concept model and contracts
 
-Agreed 2026-10-25. This is the model slices 11 to 17 build toward (section 11); slices 11 to 13 are built. Where it conflicts with sections 5 to 8, those sections describe the current code and this section wins for new work. Points marked **open** are settled in the slice that builds them.
+Agreed 2026-10-25. This is the model slices 11 to 17 build toward (section 11); slices 11 to 14 are built. Where it conflicts with sections 5 to 8, those sections describe the current code and this section wins for new work. Points marked **open** are settled in the slice that builds them.
 
 ### Personas
 
@@ -315,7 +318,7 @@ The only place an action author plugs in code.
 - **Outcome:** exit code 0 means succeeded; anything else means failed.
 - **Rules:** pure (no I/O, env reads, or globals), no Helm syntax, no workflow-level Argo. Actions don't declare sources; sources are injected (below).
 
-The **reporter** is an action that reads `{{ status.context }}`, `{{ status.state }}`, `{{ status.description }}`, `{{ source.repo }}`, and `{{ source.sha }}`. Checks require a pipeline source, which replaces today's `repo`/`sha` param convention.
+The **reporter** is an action that reads `{{ status.context }}`, `{{ status.state }}`, `{{ status.description }}`, `{{ source.url }}`, and `{{ source.sha }}`. Checks require a pipeline source, which replaced the `repo`/`sha` param convention in slice 14.
 
 ### The step contract
 
@@ -333,13 +336,13 @@ Decided in slice 12 (2026-10-25): `Step(name, action, when=, status=, on_success
 
 ### Sources and revisions
 
-- **Declaring them.** A pipeline has at most one main source: `Pipeline(source=Source(repo=..., revision=...))`. A stage can request more: `Stage(..., sources=[Source(name="fixtures", repo=..., revision=...)])`. Arbitrary extra sources exist only at stage level. `repo` and `revision` may use `{{ param.x }}` and `{{ values.a.b }}`.
+- **Declaring them.** A pipeline has at most one main source: `Pipeline(source=Source(url=..., revision=...))` (built in slice 14; `url` is what `git fetch` takes). A stage can request more: `Stage(..., sources=[Source(name="fixtures", url=..., revision=...)])` (slice 16). Arbitrary extra sources exist only at stage level. `url` and `revision` may use `{{ param.x }}` and `{{ values.a.b }}`. `source` is a reserved stage name.
 - **Revisions.** A revision is a commit SHA or any other reference. A reference that isn't a SHA is resolved to its head commit once, and that SHA is used from then on. The main source resolves before the first stage. A stage source resolves when its stage starts, so all of that stage's steps see one commit. `argo retry` keeps succeeded nodes, so a retried run keeps its SHAs.
-- **Fetching.** A framework-generated source step resolves the revision, checks it out, and publishes the checkout (with `.git`) as an artifact and the SHA as an output. The main source step is a task named `source` before the first stage. A stage source step is a task `source-<name>` at the start of its stage's sub-DAG, which its steps depend on. The SHA of the main source is a global output, so pipeline reactions and checks can read it (`{{ source.sha }}`).
-- **Injection.** Every step gets the main source, and every step in a stage gets that stage's sources, through an input artifact the framework adds. Sources are placed at `/sources/<name>` (the main source is named `main`) and exposed as `STAGECRAFT_SOURCE_<NAME>` (uppercased, `-` as `_`). Paths are unique by construction: source names are unique within a stage and `main` is reserved. The main source's path is the default working directory.
-- **Reactions and the reporter get no sources.** They run from exit hooks and `onExit`, which also run when a source step failed. They read `{{ source.repo }}` and `{{ source.sha }}` instead.
-- **Accepted gap:** if the main source step fails (bad reference, credentials), there is no SHA, so the pipeline's check can't be reported. The failure shows in the Argo UI.
-- **Settings:** the source step's image and git credentials are framework values at fixed paths under `stagecraft.sources` in the generated chart (below), required as soon as a pipeline declares a source. The exact keys are settled in slice 14.
+- **Fetching.** A framework-generated source step runs `git fetch --depth 1 <url> <revision>`, checks out `FETCH_HEAD`, and publishes the commit as a global output parameter and the checkout (shallow, with `.git`) as a global output artifact. Decided in slice 14 after verifying on kind: Argo's git input artifact can only reach a commit that isn't a branch tip with a full clone, which would put the whole history in the artifact every step downloads; git's own shallow fetch reaches any commit. The main source step is a task named `source` before the first stage; the first stage and the pipeline's pending report depend on it. A stage source step will be a task `source-<name>` at the start of its stage's sub-DAG, which its steps depend on. Global outputs are readable everywhere, sub-DAG tasks, exit hooks, and `onExit` included (verified), so steps take the checkout from `{{workflow.outputs.artifacts.stagecraft-source}}` with no routing through stage DAGs.
+- **Injection.** Every step gets the main source, and every step in a stage gets that stage's sources, through an input artifact the framework adds. Sources are placed at `/sources/<name>` (the main source is named `main`) and exposed as `STAGECRAFT_SOURCE_<NAME>` (uppercased, `-` as `_`). Paths are unique by construction: source names are unique within a stage and `main` is reserved. The main source's path is the working directory unless the action sets one.
+- **Reactions and the reporter get no sources.** They run from exit hooks and `onExit`, which also run when a source step failed. They read `{{ source.url }}`, `{{ source.revision }}` (as given), and `{{ source.sha }}` instead, as every action can.
+- **Accepted gap:** if the main source step fails (bad reference, credentials), there is no SHA, so the pipeline's check can't be reported. The failure shows in the Argo UI. The global parameter is then empty (or stays a literal `{{workflow.outputs.parameters...}}` if the step never started) rather than erroring (verified), so the pipeline's final report is guarded by `when: '<sha>' =~ '^[0-9a-f]{40}$'` and is skipped.
+- **Settings:** framework values in the generated chart, required as soon as a pipeline declares a source: `stagecraft.sources.image` (an image with `git` and `sh`) and `stagecraft.sources.secret` (a Secret with `username` and `password` keys for HTTPS). The Secret keys are optional at run time, so public repositories need no Secret. Credentials go in an HTTP header for the fetch only, never into the checkout's `.git/config`. SSH keys are deferred (section 15).
 
 ### Files between steps
 

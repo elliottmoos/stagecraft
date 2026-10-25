@@ -1,4 +1,4 @@
-# 8. Triggers
+# 9. Triggers
 
 Some runs should happen on a schedule: a nightly build of the main branch, a weekly dependency
 check. A **trigger** runs the pipeline on a schedule.
@@ -6,7 +6,7 @@ check. A **trigger** runs the pipeline on a schedule.
 ## Declaring a trigger
 
 ```python
-Trigger.cron("0 2 * * *", name="nightly", params={"repo": "example/service", "sha": "main"})
+Trigger.cron("0 2 * * *", name="nightly", params={"revision": "main", "push": "true"})
 ```
 
 - **The schedule** is a five-field cron expression (`minute hour day month weekday`) or a macro:
@@ -31,25 +31,24 @@ fails otherwise.
 
 ## Growing the example
 
-A nightly build of `main`:
+A nightly build of `main` that pushes its image:
 
 ```python file=pipelines/service_ci.py
-from stagecraft.spec import Param, Pipeline, Stage, Step, Trigger
+from stagecraft.spec import Param, Pipeline, Source, Stage, Step, Trigger
 
-from actions import GitHubStatus, Make, Notify, Shell
+from actions import GitHubStatus, Make, Notify
 
 pipeline = Pipeline(
     name="service-ci",
     params=[
-        Param("repo", required=True, description="Repository, as owner/name"),
-        Param("sha", required=True, description="Commit to build"),
+        Param("revision", default="main", description="Branch, tag, or commit to build"),
         Param("push", default="false", enum=["true", "false"], description="Push the image"),
         Param("deploy", default="false", enum=["true", "false"], description="Deploy to staging"),
     ],
+    source=Source(url="https://github.com/example/service.git", revision="{{ param.revision }}"),
     status="ci/pipeline",
     status_reporter=GitHubStatus(),
     stages=[
-        Stage("prepare", [Step("fetch", Shell(script="echo fetching {{ param.repo }}"))]),
         Stage(
             "verify",
             [
@@ -57,7 +56,7 @@ pipeline = Pipeline(
                 Step("unit-tests", Make(target="test")),
             ],
             status="ci/verify",
-            on_failure=[Notify(message="{{ step.name }} failed for {{ param.sha }}")],
+            on_failure=[Notify(message="{{ step.name }} failed at {{ source.sha }}")],
         ),
         Stage(
             "package",
@@ -77,20 +76,17 @@ pipeline = Pipeline(
             "0 2 * * *",
             name="nightly",
             timezone="Europe/Amsterdam",
-            params={"repo": "example/service", "sha": "main"},
+            params={"revision": "main", "push": "true"},
         ),
     ],
 )
 ```
 
-This renders a `CronWorkflow` named `service-ci-nightly`, which runs the pipeline with `sha` set
-to `main`.
+This renders a `CronWorkflow` named `service-ci-nightly`. Each night's run resolves `main` to
+its head commit when it starts, so the whole run, and its commit statuses, use that commit.
 
 ## Things to know
 
-- **A schedule has no commit.** Params are literal, so `sha` is `main` here, not a commit SHA.
-  GitHub's status API needs a SHA, so this run's statuses will fail to post. That's harmless
-  (reporting is best-effort) but worth knowing.
 - **The first ticks after an install can be missed.** Helm creates a release's `CronWorkflow`s
   before its `WorkflowTemplate`s, and Argo marks a cron whose template doesn't exist yet as
   invalid until it checks again, a few minutes later (at most 20). This only affects a brand-new
@@ -105,4 +101,4 @@ to `main`.
 - It compiles to a `CronWorkflow` that refers to the pipeline's template, in the same file.
 - Required params must be set; values may come from Helm values.
 
-Next: [9. Shipping pipelines](09-shipping.md).
+Next: [10. Shipping pipelines](10-shipping.md).

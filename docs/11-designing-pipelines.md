@@ -1,4 +1,4 @@
-# 10. Designing pipelines
+# 11. Designing pipelines
 
 You've now seen every piece. This chapter steps back: the finished pipeline as a whole, a precise
 map of what you can and can't customize, patterns for growing beyond one pipeline, and a guide
@@ -14,35 +14,34 @@ to the errors you'll meet.
 title: "service-ci (status ci/pipeline)"
 ---
 flowchart LR
-  subgraph s0["prepare"]
-    s0b0["fetch"]
+  subgraph s0["verify<br/>status: ci/verify"]
+    s0b0["lint"]
+    s0b1["unit-tests"]
   end
-  subgraph s1["verify<br/>status: ci/verify"]
-    s1b0["lint"]
-    s1b1["unit-tests"]
+  subgraph s1["package<br/>status: ci/package"]
+    s1b0["image"]
   end
-  subgraph s2["package<br/>status: ci/package"]
-    s2b0["image"]
+  subgraph s2["deploy<br/>when: {{ param.deploy }} == 'true'<br/>status: ci/deploy"]
+    s2b0["staging"]
   end
-  subgraph s3["deploy<br/>when: {{ param.deploy }} == 'true'<br/>status: ci/deploy"]
-    s3b0["staging"]
-  end
+  src[("source<br/>https://github.com/example/service.git<br/>{{ param.revision }}")]
+  src --> s0
   s0 --> s1
   s1 --> s2
-  s2 --> s3
-  s1h0["notify"]
-  s1 -.->|on failure| s1h0
+  s0h0["notify"]
+  s0 -.->|on failure| s0h0
   p0["notify"]
-  s3 -.->|pipeline on failure| p0
+  s2 -.->|pipeline on failure| p0
   t0(["nightly<br/>0 2 * * * Europe/Amsterdam"])
-  t0 -.-> s0
+  t0 -.-> src
 ```
 
 Reading it from the left:
 
 - **The trigger** (`nightly`) starts a run every night; people start others from the Argo UI with
-  their own `repo`, `sha`, `push`, and `deploy`.
-- **`prepare`** stands in for fetching the code.
+  their own `revision`, `push`, and `deploy`.
+- **The source** is checked out first, at the commit `revision` resolves to, and every step
+  starts in that checkout.
 - **`verify`** runs `lint` and `unit-tests` in parallel, each in its own pod. Its status is
   `ci/verify`, and its `on_failure` handler notifies the channel.
 - **`package`** builds the image, pushing it when `push` is `true`.
@@ -50,12 +49,11 @@ Reading it from the left:
 - **The pipeline's own status** `ci/pipeline` tracks the whole run, and its `on_failure` handler
   posts how a failed run ended.
 
-Everything installation-specific (images, build resources, the channel, the token Secret's name)
+Everything installation-specific (images, build resources, the channel, the Secrets' names)
 comes from each installation's values, which Helm checks against the generated schema.
 
-Each step starts in its own empty container: Stagecraft doesn't share files between steps yet.
-Until it does, an action that needs the code fetches it itself. Framework-managed sources and files
-passed between jobs are planned
+Steps share nothing but the source: each starts from its own copy of the checkout. Passing files
+one step produces (a binary, a report) to later steps is planned
 ([DESIGN.md section 16](../DESIGN.md#16-concept-model-and-contracts)).
 
 ## What you can customize
@@ -66,7 +64,7 @@ valves.
 ### Open: actions (code you write)
 
 - **Fields**: any Pydantic fields, defaults, and validators. Defaults may be placeholders
-  (`sha: str = "{{ param.sha }}"`).
+  (`sha: str = "{{ source.sha }}"`).
 - **`compile`**: returns any Hera `Container` or `Script`: image, command, env, Secrets by name,
   resources, retries, timeouts, service account, node selection, security context, volumes. The
   only limits: it must be pure and take installation details from `ctx`.
@@ -106,12 +104,14 @@ built from data. See the patterns below.
 - How stages compile: each stage a sub-DAG of its steps, stages in order, one `main` DAG.
 - How handlers and statuses are wired (exit hooks, the `onExit` handler, report tasks) and what
   they report.
-- The placeholder namespaces: `param`, `values`, `step`, `status`, and the outcome words
+- How the source is fetched (shallowly, once per run) and where steps find it.
+- The placeholder namespaces: `param`, `values`, `source`, `step`, `status`, and the outcome words
   (`succeeded`, `failed`, `skipped`).
 - How Helm values are rendered (always strings) and how Argo expressions are escaped.
 - The available trigger kinds (`cron`).
 - Generated names: templates are `<stage>-<step>`, and so on; `main`,
-  `on-exit`, `status-report`, and `status-reporter` are reserved.
+  `on-exit`, `status-report`, `status-reporter`, and `source` are reserved, as is the
+  `stagecraft` values key.
 
 If a pipeline needs something on the fixed side, that's a change to Stagecraft. The features
 left out on purpose so far, and what would justify each, are in
@@ -126,31 +126,29 @@ each result to a module-level name: Stagecraft collects `Pipeline` objects from 
 variables, not from lists or function calls it can't see.
 
 ```python file=pipelines/libraries.py
-from stagecraft.spec import Param, Pipeline, Stage, Step
+from stagecraft.spec import Param, Pipeline, Source, Stage, Step
 
 from actions import Make, Notify
 
 
-def library_pipeline(name: str, targets: list[str]) -> Pipeline:
-    """A verify-only pipeline: run each make target in parallel."""
+def library_pipeline(name: str, repo: str, targets: list[str]) -> Pipeline:
+    """A verify-only pipeline: check out `repo` and run each make target in parallel."""
     return Pipeline(
         name=name,
-        params=[
-            Param("repo", required=True, description="Repository, as owner/name"),
-            Param("sha", required=True, description="Commit to build"),
-        ],
+        params=[Param("revision", default="main", description="Branch, tag, or commit")],
+        source=Source(url=f"https://github.com/{repo}.git", revision="{{ param.revision }}"),
         stages=[
             Stage(
                 "verify",
                 [Step(target, Make(target=target)) for target in targets],
-                on_failure=[Notify(message="{{ step.name }} failed for {{ param.repo }}")],
+                on_failure=[Notify(message="{{ step.name }} failed at {{ source.sha }}")],
             ),
         ],
     )
 
 
-auth_lib = library_pipeline("auth-lib-ci", ["lint", "test"])
-http_lib = library_pipeline("http-lib-ci", ["lint", "test", "bench"])
+auth_lib = library_pipeline("auth-lib-ci", "example/auth-lib", ["lint", "test"])
+http_lib = library_pipeline("http-lib-ci", "example/http-lib", ["lint", "test", "bench"])
 ```
 
 The same idea works one level down: a function returning a `Stage`, or a list of steps, shared
@@ -159,7 +157,7 @@ by several pipelines.
 ### Designing actions people enjoy using
 
 - **Name the intent.** `Make(target="lint")` reads better than a shell one-liner.
-- **Default the common case**, including placeholders (`repo: str = "{{ param.repo }}"`).
+- **Default the common case**, including placeholders (`sha: str = "{{ source.sha }}"`).
 - **Pass fields as environment variables** rather than splicing them into scripts.
 - **Take every installation detail from `ctx`**: images, Secret names, sizes.
 - **Validate what you can** in field validators, remembering they see placeholders as text.
@@ -193,7 +191,7 @@ by several pipelines.
    `status_reporter`; require the pipeline's context in branch protection.
 5. Add handlers for notifications and cleanup; triggers for schedules.
 6. `stagecraft check`, `stagecraft graph`, `stagecraft render`, then `helm template` with each
-   environment's values (chapter 9).
+   environment's values (chapter 10).
 
 ## Troubleshooting
 
@@ -212,8 +210,9 @@ a value needs quotes. Common render messages:
 | `handler steps cannot set when, status, or handlers` | A handler with `when=`, `status=`, or handlers | Remove them; put conditions on the owning step |
 | `duplicate step name 'make'` | Two bare actions of one class in a stage | Wrap each in `Step("<name>", ...)` |
 | `must be a lowercase DNS label` | A stage or step name like `Verify` | Use `a-z`, `0-9`, `-` |
-| `status contexts need a status_reporter` / `need required params 'repo' and 'sha'` | Statuses without their prerequisites | Add the reporter and the params |
-| `trigger 'nightly': required param 'sha' has no value` | A trigger doesn't set a required param | Add it to the trigger's `params` |
+| `status contexts need a status_reporter` / `need a pipeline source` | Statuses without their prerequisites | Add the reporter and a `source` |
+| `'{{ source.sha }}' needs a pipeline source` | A `{{ source.* }}` placeholder in a pipeline without one | Add `source=Source(...)` |
+| `trigger 'nightly': required param 'env' has no value` | A trigger doesn't set a required param | Add it to the trigger's `params` |
 | `template name 'a-b-c' is generated twice` | Names like stage `a` + step `b-c` and stage `a-b` + step `c` | Rename a stage or step |
 | `unbalanced '{{' in rendered output` | A lone `{{` or `}}` in a field | Balance it, or move the text into a file the action reads |
 | `no Pipeline found at module level` | A pipeline file without a module-level `Pipeline` | Assign the pipeline to a variable |

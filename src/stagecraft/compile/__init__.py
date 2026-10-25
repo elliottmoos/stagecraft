@@ -11,6 +11,7 @@ from hera.workflows import DAG, CronWorkflow, Parameter, Task, WorkflowTemplate
 from hera.workflows.models import Arguments, ContinueOn, LifecycleHook, WorkflowTemplateRef
 from hera.workflows.models import Parameter as ParameterModel
 
+from stagecraft.compile import source
 from stagecraft.compile.placeholders import Scopes, lower, lower_model
 from stagecraft.context import CompileContext
 from stagecraft.errors import CompileError
@@ -62,9 +63,18 @@ def compile_pipeline(pipeline: Pipeline, ctx: CompileContext) -> WorkflowTemplat
     lowering = _Lowering({p.name for p in pipeline.params}, ctx)
     templates = []
     main_tasks = []
-    if pipeline.status:
-        main_tasks.append(_report("pipeline-status-pending", pipeline.status, "pending", "Running"))
     depends = None
+    if pipeline.source:
+        lowering, source_template = _compile_source(pipeline, lowering)
+        templates.append(source_template)
+        main_tasks.append(Task(name=source.TASK, template=source_template))
+        depends = source.TASK
+    if pipeline.status:
+        main_tasks.append(
+            _report(
+                "pipeline-status-pending", pipeline.status, "pending", "Running", depends=depends
+            )
+        )
     for stage in pipeline.stages:
         where = f"pipeline {pipeline.name!r}, stage {stage.name!r}"
         stage_dag, step_templates = _compile_stage(pipeline, stage, lowering)
@@ -123,10 +133,31 @@ def compile_triggers(pipeline: Pipeline, ctx: CompileContext) -> list[CronWorkfl
 
 @dataclasses.dataclass(frozen=True)
 class _Lowering:
-    """What lowering placeholders needs: the declared param names and the compile context."""
+    """What lowering placeholders needs: the declared param names, the compile context, and the
+    `{{ source.* }}` fields when the pipeline has a source."""
 
     names: set[str]
     ctx: CompileContext
+    source: Mapping[str, str] | None = None
+
+    @property
+    def scopes(self) -> Scopes:
+        return {"source": self.source} if self.source else {}
+
+
+def _compile_source(pipeline: Pipeline, lowering: _Lowering):
+    """The lowering with `{{ source.* }}` fields, and the source step's template."""
+    assert pipeline.source is not None
+    fields = {}
+    for field in ("url", "revision"):
+        try:
+            fields[field] = lower(
+                getattr(pipeline.source, field), lowering.names, values=lowering.ctx.value
+            )
+        except CompileError as e:
+            raise CompileError(f"pipeline {pipeline.name!r}, source {field}: {e}") from e
+    template = source.source_step(fields["url"], fields["revision"], lowering.ctx)
+    return dataclasses.replace(lowering, source={**fields, "sha": source.SHA}), template
 
 
 def _compile_param(param: Param) -> Parameter:
@@ -142,6 +173,10 @@ def _compile_stage(pipeline: Pipeline, stage: Stage, lowering: _Lowering):
         name = f"{stage.name}-{step.name}"
         where = f"pipeline {pipeline.name!r}, stage {stage.name!r}, step {step.name!r}"
         template = _compile_action(step.action, name=name, lowering=lowering, where=where)
+        arguments = None
+        if lowering.source:
+            template = source.inject(template, where)
+            arguments = [source.argument()]
         hooks, hook_templates = _compile_exit_hook(
             step,
             task=step.name,
@@ -157,6 +192,7 @@ def _compile_stage(pipeline: Pipeline, stage: Stage, lowering: _Lowering):
             Task(
                 name=step.name,
                 template=template,
+                arguments=arguments,
                 depends=depends,
                 when=when,
                 hooks=hooks,
@@ -208,6 +244,8 @@ def _compile_exit_handler(pipeline: Pipeline, lowering: _Lowering) -> list:
         report=pipeline.status,
         lowering=lowering,
         where=f"pipeline {pipeline.name!r}",
+        # Without a commit (the source step failed) there's nothing to report on.
+        report_guard=source.HAS_COMMIT,
     )
 
 
@@ -221,6 +259,7 @@ def _compile_handler_dag(
     report: str | None,
     lowering: _Lowering,
     where: str,
+    report_guard: str | None = None,
 ) -> list:
     """A DAG that reports the final commit status for `report` (if set) and runs `owner`'s
     handlers, each guarded by `when` on `status`, followed by the handler templates. Returns []
@@ -229,7 +268,7 @@ def _compile_handler_dag(
     templates = []
     if report:
         for argo_status, state in _FINAL_STATES:
-            when = f"{status} == {argo_status}"
+            when = f"{status} == {argo_status}" + (f" && {report_guard}" if report_guard else "")
             tasks.append(_report(f"status-{state}", report, state, argo_status, when=when))
     for field in fields:
         outcomes = _HANDLER_OUTCOMES[field]
@@ -324,6 +363,7 @@ def _compile_action(
     scopes: Scopes | None = None,
 ):
     try:
+        scopes = {**lowering.scopes, **(scopes or {})}
         lowered = lower_model(action, lowering.names, scopes, lowering.ctx.value)
         template = lowered.compile(lowering.ctx)
     except CompileError as e:
@@ -335,7 +375,9 @@ def _lower_when(when: str | None, lowering: _Lowering, where: str) -> str | None
     if when is None:
         return None
     try:
-        return lower(when, lowering.names, quote_params=True, values=lowering.ctx.value)
+        return lower(
+            when, lowering.names, lowering.scopes, quote_params=True, values=lowering.ctx.value
+        )
     except CompileError as e:
         raise CompileError(f"{where}: when: {e}") from e
 
@@ -347,7 +389,7 @@ def _check_unique_template_names(pipeline: Pipeline, templates) -> None:
             raise CompileError(
                 f"pipeline {pipeline.name!r}: template name {template.name!r} is generated twice; "
                 f"rename a stage or step ({ENTRYPOINT!r}, {EXIT_HANDLER!r}, {STATUS_REPORT!r}, "
-                f"and {STATUS_REPORTER!r} are reserved, and generated '<stage>-<step>' names "
-                "must not collide with other template names)"
+                f"{STATUS_REPORTER!r}, and {source.TASK!r} are reserved, and generated "
+                "'<stage>-<step>' names must not collide with other template names)"
             )
         seen.add(template.name)

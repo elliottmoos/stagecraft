@@ -88,7 +88,7 @@ Stagecraft writes `Chart.yaml`, `values.schema.json`, and `templates/`, and noth
 |---|---|---|
 | Action classes: their fields and the container they compile to | Pipelines, stages, steps, params, conditions, handlers, statuses, triggers | How stages become an Argo DAG, how handlers and statuses are wired, how Helm values are rendered and escaped |
 
-Chapter 10 maps this out in detail. For now, the short version: **actions are open, the pipeline
+Chapter 11 maps this out in detail. For now, the short version: **actions are open, the pipeline
 structure is closed.** You can make an action do anything a container can do, and you combine
 actions with a small, fixed vocabulary.
 
@@ -99,6 +99,7 @@ actions with a small, fixed vocabulary.
 | Action | A Python class that compiles to one container. Reusable work. |
 | Step | An action placed in a stage under a name, with optional condition, check, and handlers. |
 | Stage | Steps that run in parallel. |
+| Source | The repository a pipeline builds, checked out once per run at one commit. |
 | Pipeline | Ordered stages, plus params, handlers, statuses, and triggers. |
 | Param | A per-run input, shown in the Argo UI's submit form. |
 | Helm value | A per-installation input, supplied when the chart is installed. |

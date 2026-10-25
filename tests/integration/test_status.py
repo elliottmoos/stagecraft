@@ -10,8 +10,6 @@ from support import unique_name
 
 pytestmark = pytest.mark.integration
 
-COMMIT = {"repo": "example/repo", "sha": "abc123"}
-
 
 def reports(workflow: dict) -> dict[str, list[tuple[str, str]]]:
     """(state, description) posted per context, in order. Asserts each report finished before
@@ -37,7 +35,7 @@ FAILURE = ("failure", "Failed")
 
 
 def test_failure_reports_failure_and_never_reports_stages_that_did_not_run(argo):
-    workflow = argo.run(status.pipeline, {**COMMIT, "fail": "true"})
+    workflow = argo.run(status.pipeline, {"fail": "true"})
 
     assert workflow["status"]["phase"] == "Failed"
     assert reports(workflow) == {
@@ -48,7 +46,7 @@ def test_failure_reports_failure_and_never_reports_stages_that_did_not_run(argo)
 
 
 def test_success_with_skipped_stage_reports_it_as_skipped(argo):
-    workflow = argo.run(status.pipeline, COMMIT)
+    workflow = argo.run(status.pipeline)
 
     assert workflow["status"]["phase"] == "Succeeded"
     assert reports(workflow) == {
@@ -60,7 +58,7 @@ def test_success_with_skipped_stage_reports_it_as_skipped(argo):
 
 
 def test_success_with_stage_run_by_when(argo):
-    workflow = argo.run(status.pipeline, {**COMMIT, "deploy": "true"})
+    workflow = argo.run(status.pipeline, {"deploy": "true"})
 
     assert workflow["status"]["phase"] == "Succeeded"
     assert reports(workflow)["ci/deploy"] == [PENDING, SUCCESS]
@@ -74,7 +72,7 @@ def test_failing_reporter_never_fails_the_pipeline(argo):
         }
     )
 
-    workflow = argo.run(broken, COMMIT)
+    workflow = argo.run(broken)
 
     assert workflow["status"]["phase"] == "Succeeded"
     nodes = workflow["status"]["nodes"].values()
@@ -84,7 +82,7 @@ def test_failing_reporter_never_fails_the_pipeline(argo):
 
 def test_stopped_pipeline_reports_failure_except_for_the_running_step(argo):
     argo.install([status.pipeline])
-    workflow = argo.submit(status.pipeline.name, {**COMMIT, "sleep": "120"})
+    workflow = argo.submit(status.pipeline.name, {"sleep": "120"})
     argo.wait_for_running_pod(workflow, "unit-tests")
 
     argo.stop(workflow)

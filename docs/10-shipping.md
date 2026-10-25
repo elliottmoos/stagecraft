@@ -1,4 +1,4 @@
-# 9. Shipping pipelines
+# 10. Shipping pipelines
 
 A pipeline is only useful once it's installed. This chapter covers getting the generated chart
 into a cluster, and the checks that keep it installable.
@@ -74,7 +74,7 @@ the diff of the generated chart like any other change: it's in the pull request.
 ## Using it day to day
 
 - **Submitting a run**: in the Argo UI under Workflow Templates, or with
-  `argo submit --from workflowtemplate/<pipeline> -p sha=<commit> ...`. Params appear as the
+  `argo submit --from workflowtemplate/<pipeline> -p revision=<commit> ...`. Params appear as the
   submit form.
 - **Hooking up pushes and pull requests**: anything that can submit a workflow with params works
   (Argo Events, a webhook relay, another CI system). Stagecraft only defines what a run does.
@@ -89,4 +89,4 @@ the diff of the generated chart like any other change: it's in the pull request.
 - CI renders and checks the chart is up to date, then runs `helm template` (which validates the
   values), `argo lint`, and kubeconform per environment.
 
-Next: [10. Designing pipelines](10-designing-pipelines.md), which puts it all together.
+Next: [11. Designing pipelines](11-designing-pipelines.md), which puts it all together.

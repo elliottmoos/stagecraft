@@ -1,4 +1,4 @@
-# 7. Commit statuses
+# 8. Commit statuses
 
 On GitHub, a pull request shows checks next to each commit, and branch protection can require
 some of them to pass before merging. Stagecraft can report a check for the pipeline and for any
@@ -46,8 +46,9 @@ Stagecraft doesn't call GitHub itself. Every report goes through the pipeline's
 | `{{ status.state }}` | `pending`, `success`, `failure`, or `error` |
 | `{{ status.description }}` | `Running`, `Succeeded`, `Failed`, `Error`, or `Skipped` |
 
-and gets the commit from the `repo` and `sha` params, which every pipeline with statuses must
-declare as required. `{{ status.* }}` only works in the reporter.
+and gets the commit from the pipeline's source (chapter 7): `{{ source.sha }}` is the commit the
+run resolved, and `{{ source.url }}` the repository. Statuses need a source. `{{ status.* }}`
+only works in the reporter.
 
 Reporting is **best-effort**: if the reporter fails (GitHub is down, the token expired), the
 failure shows in the Argo UI, but the build carries on and its result is unaffected.
@@ -56,7 +57,8 @@ failure shows in the Argo UI, but the build carries on and its result is unaffec
 
 The reporter takes its placeholders as field defaults (placeholders work in fields, not in
 `compile`; chapter 3), passes them to curl as environment variables, and reads the token from a
-Secret named by a Helm value:
+Secret named by a Helm value. GitHub's API wants `owner/name`, which the script cuts out of the
+source's URL:
 
 ```python file=actions.py
 import re
@@ -130,14 +132,14 @@ class Notify(Action):
 class GitHubStatus(Action):
     """Posts a commit status to GitHub. Used as a pipeline's status_reporter."""
 
-    repo: str = "{{ param.repo }}"
-    sha: str = "{{ param.sha }}"
+    url: str = "{{ source.url }}"
+    sha: str = "{{ source.sha }}"
     context: str = "{{ status.context }}"
     state: str = "{{ status.state }}"
     description: str = "{{ status.description }}"
 
     def compile(self, ctx: CompileContext) -> Container:
-        fields = ("repo", "sha", "context", "state", "description")
+        fields = ("url", "sha", "context", "state", "description")
         return Container(
             image=ctx.value("images.curl", str),
             env=[
@@ -150,7 +152,8 @@ class GitHubStatus(Action):
             ],
             command=["sh", "-c"],
             args=[
-                'curl -fsS -H "Authorization: Bearer $GITHUB_TOKEN"'
+                'REPO="${URL#https://github.com/}"; REPO="${REPO%.git}";'
+                ' curl -fsS -H "Authorization: Bearer $GITHUB_TOKEN"'
                 ' "https://api.github.com/repos/$REPO/statuses/$SHA"'
                 ' -d "{\\"context\\": \\"$CONTEXT\\", \\"state\\": \\"$STATE\\",'
                 ' \\"description\\": \\"$DESCRIPTION\\"}"'
@@ -158,25 +161,24 @@ class GitHubStatus(Action):
         )
 ```
 
-The pipeline reports on itself and on each stage after `prepare`:
+The pipeline reports on itself and on each stage:
 
 ```python file=pipelines/service_ci.py
-from stagecraft.spec import Param, Pipeline, Stage, Step
+from stagecraft.spec import Param, Pipeline, Source, Stage, Step
 
-from actions import GitHubStatus, Make, Notify, Shell
+from actions import GitHubStatus, Make, Notify
 
 pipeline = Pipeline(
     name="service-ci",
     params=[
-        Param("repo", required=True, description="Repository, as owner/name"),
-        Param("sha", required=True, description="Commit to build"),
+        Param("revision", default="main", description="Branch, tag, or commit to build"),
         Param("push", default="false", enum=["true", "false"], description="Push the image"),
         Param("deploy", default="false", enum=["true", "false"], description="Deploy to staging"),
     ],
+    source=Source(url="https://github.com/example/service.git", revision="{{ param.revision }}"),
     status="ci/pipeline",
     status_reporter=GitHubStatus(),
     stages=[
-        Stage("prepare", [Step("fetch", Shell(script="echo fetching {{ param.repo }}"))]),
         Stage(
             "verify",
             [
@@ -184,7 +186,7 @@ pipeline = Pipeline(
                 Step("unit-tests", Make(target="test")),
             ],
             status="ci/verify",
-            on_failure=[Notify(message="{{ step.name }} failed for {{ param.sha }}")],
+            on_failure=[Notify(message="{{ step.name }} failed at {{ source.sha }}")],
         ),
         Stage(
             "package",
@@ -217,6 +219,10 @@ notify:
   channel: "#ci"
 github:
   tokenSecret: github-token
+stagecraft:
+  sources:
+    image: alpine/git:2.47.2
+    secret: github-checkout
 ```
 
 ## Setting up branch protection
@@ -236,8 +242,9 @@ pipeline's own).
 
 ## Rules and limits
 
-- Statuses need a `status_reporter` and required `repo` and `sha` params; the render fails
-  without them.
+- Statuses need a `status_reporter` and a pipeline source; the render fails without them.
+- If the source step fails (say, a revision that doesn't exist), there's no commit to report on,
+  so nothing is reported; the failure shows in the Argo UI.
 - The reporter is a bare action (not a `Step`), with no template inputs of its own.
 - If a run is terminated (`argo terminate`), or stopped while a step with a status is running
   (`argo stop`), that context can stay `pending`. Re-running the workflow updates it.
@@ -249,4 +256,4 @@ pipeline's own).
   pipeline's context.
 - Your `status_reporter` action makes the API call; reporting never fails the build.
 
-Next: [8. Triggers](08-triggers.md).
+Next: [9. Triggers](09-triggers.md).

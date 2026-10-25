@@ -60,7 +60,7 @@ pipelines:
 
 A typo in a value path inside an action shows up here too: the misspelled path becomes a new
 required value that no values file sets. Run `helm template` with each environment's values in
-CI (chapter 9) to catch it before merging.
+CI (chapter 10) to catch it before merging.
 
 ## Growing the example
 
@@ -199,7 +199,7 @@ SecretEnv(
 )
 ```
 
-Chapter 7 uses exactly this.
+Chapter 8 uses exactly this.
 
 ## As a subchart
 

@@ -65,6 +65,17 @@ Facts confirmed by experiment or by `tests/integration`. Re-check them when bump
   WorkflowTemplate") and isn't scheduled until the controller re-processes it (about 3 minutes on
   kind; at most the 20-minute informer resync). Accepted. Tests install the template first.
 - CronWorkflow names are limited to 52 characters (`argo lint` and the controller reject longer).
+- Argo's git input artifact with `depth: 1` can't check out a commit that isn't a branch tip
+  ("reference not found"); only a full clone can. So the source step runs
+  `git fetch --depth 1 <url> <revision>` itself, which reaches any commit on GitHub.
+- Global outputs (`globalName`) are readable from sub-DAG tasks, exit hooks, and `onExit`. If the
+  producing step failed, the global parameter has no value: it reads as `''` when the step's main
+  container ran, or stays literal (`{{workflow.outputs.parameters.x}}`) when it never started.
+  Neither is an error, so guards test its shape (`=~ '^[0-9a-f]{40}$'`).
+- A failed step's output artifacts are still uploaded when its main container ran.
+- Output artifacts can come from the main container's own filesystem (no volume needed).
+- On the kind quick-start, the default artifact repository is the namespace's MinIO
+  (`artifact-repositories` configmap), not the controller config's plugin entry.
 - `argo terminate` runs **no** exit handlers, so a terminated run can leave commit statuses
   pending. Accepted: builds are rarely terminated, and re-running the workflow updates the
   statuses. Don't add machinery for this case.
@@ -105,7 +116,8 @@ kubeconform -strict -summary -schema-location default \
 ```
 
 Integration tests pass `--context kind-stagecraft` to every kubectl, helm, and argo call. Keep it
-that way so tests never touch the user's current kube context.
+that way so tests never touch the user's current kube context. Fixtures with a source fetch the
+public `octocat/Hello-World` repository from GitHub, so the kind cluster needs network access.
 
 ## Rules
 
@@ -132,11 +144,13 @@ that way so tests never touch the user's current kube context.
   `tests/fixtures/values.yaml` is test-only and never published.
 - Actions hold only their own fields and `compile`; a `Step` places one in a stage with a name,
   `when`, `status`, and handlers (decided 2026-10-25). Don't add step features to `Action`.
+- Statuses need a pipeline source: the reporter reads `{{ source.sha }}`, the commit the run
+  resolved. Handlers and the reporter get the `{{ source.* }}` placeholders, never the checkout.
 - Handlers see Stagecraft outcomes (`{{ step.outcome }}`: `succeeded`, `failed`), never Argo
   phases. The status reporter keeps host-style states (`success`, `failure`, `error`).
 - There is no shared filesystem: each step runs in its own pod, and files will cross step
   boundaries only as artifacts (decided 2026-10-25). Don't add volumes shared between steps.
-- `DESIGN.md` section 16 is the target model for the next slices (sources, artifacts,
+- `DESIGN.md` section 16 is the target model for the next slices (artifacts, stage sources,
   conditions). Read it before changing the authoring model.
 - Hera's API changes between versions, so check the pinned version's docs rather than guessing.
 - Don't generalize before two or three real pipelines exist. `DESIGN.md` section 15 lists the

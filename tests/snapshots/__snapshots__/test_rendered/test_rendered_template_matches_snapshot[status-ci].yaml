@@ -6,8 +6,6 @@ metadata:
 spec:
   arguments:
     parameters:
-    - name: repo
-    - name: sha
     - enum:
       - 'true'
       - 'false'
@@ -25,6 +23,8 @@ spec:
   templates:
   - dag:
       tasks:
+      - name: source
+        template: source
       - arguments:
           parameters:
           - name: context
@@ -33,6 +33,7 @@ spec:
             value: pending
           - name: description
             value: Running
+        depends: source
         name: pipeline-status-pending
         template: status-report
       - arguments:
@@ -43,9 +44,10 @@ spec:
             value: pending
           - name: description
             value: Running
+        depends: source
         name: verify-status-pending
         template: status-report
-      - depends: verify-status-pending
+      - depends: source && verify-status-pending
         hooks:
           exit:
             arguments:
@@ -114,7 +116,7 @@ spec:
     name: status-report
   - container:
       args:
-      - echo "{{`{{inputs.parameters.context}}`}}={{`{{inputs.parameters.state}}`}} ({{`{{inputs.parameters.description}}`}}) for {{`{{workflow.parameters.repo}}`}}@{{`{{workflow.parameters.sha}}`}}"
+      - echo "{{`{{inputs.parameters.context}}`}}={{`{{inputs.parameters.state}}`}} ({{`{{inputs.parameters.description}}`}}) for https://github.com/octocat/Hello-World.git@{{`{{workflow.outputs.parameters.stagecraft-source-sha}}`}}"
       command:
       - sh
       - -c
@@ -125,9 +127,60 @@ spec:
       - name: state
       - name: description
     name: status-reporter
+  - container:
+      args:
+      - |
+        set -eu
+        git init -q /sources/main
+        cd /sources/main
+        if [ -n "${GIT_PASSWORD:-}" ]; then
+          credentials="$(printf '%s:%s' "${GIT_USERNAME:-}" "$GIT_PASSWORD" | base64 | tr -d '\n')"
+          header="Authorization: Basic $credentials"
+          git -c "http.extraHeader=$header" fetch -q --depth 1 "$URL" "$REVISION"
+        else
+          git fetch -q --depth 1 "$URL" "$REVISION"
+        fi
+        git checkout -q --detach FETCH_HEAD
+        git rev-parse HEAD | tee /tmp/stagecraft-sha
+      command:
+      - sh
+      - -c
+      env:
+      - name: URL
+        value: https://github.com/octocat/Hello-World.git
+      - name: REVISION
+        value: master
+      - name: GIT_USERNAME
+        valueFrom:
+          secretKeyRef:
+            key: username
+            name: {{ .Values.stagecraft.sources.secret | quote }}
+            optional: true
+      - name: GIT_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            key: password
+            name: {{ .Values.stagecraft.sources.secret | quote }}
+            optional: true
+      image: {{ .Values.stagecraft.sources.image | quote }}
+    name: source
+    outputs:
+      artifacts:
+      - globalName: stagecraft-source
+        name: checkout
+        path: /sources/main
+      parameters:
+      - globalName: stagecraft-source-sha
+        name: sha
+        valueFrom:
+          path: /tmp/stagecraft-sha
   - dag:
       tasks:
-      - name: lint
+      - arguments:
+          artifacts:
+          - from: '{{`{{workflow.outputs.artifacts.stagecraft-source}}`}}'
+            name: stagecraft-source
+        name: lint
         template: verify-lint
       - arguments:
           parameters:
@@ -139,7 +192,11 @@ spec:
             value: Running
         name: unit-tests-status-pending
         template: status-report
-      - depends: unit-tests-status-pending
+      - arguments:
+          artifacts:
+          - from: '{{`{{workflow.outputs.artifacts.stagecraft-source}}`}}'
+            name: stagecraft-source
+        depends: unit-tests-status-pending
         hooks:
           exit:
             arguments:
@@ -156,7 +213,15 @@ spec:
       command:
       - sh
       - -c
+      env:
+      - name: STAGECRAFT_SOURCE_MAIN
+        value: /sources/main
       image: {{ .Values.images.shell | quote }}
+      workingDir: /sources/main
+    inputs:
+      artifacts:
+      - name: stagecraft-source
+        path: /sources/main
     name: verify-lint
   - container:
       args:
@@ -164,7 +229,15 @@ spec:
       command:
       - sh
       - -c
+      env:
+      - name: STAGECRAFT_SOURCE_MAIN
+        value: /sources/main
       image: {{ .Values.images.shell | quote }}
+      workingDir: /sources/main
+    inputs:
+      artifacts:
+      - name: stagecraft-source
+        path: /sources/main
     name: verify-unit-tests
   - dag:
       tasks:
@@ -246,7 +319,11 @@ spec:
     name: verify-on-exit
   - dag:
       tasks:
-      - name: staging
+      - arguments:
+          artifacts:
+          - from: '{{`{{workflow.outputs.artifacts.stagecraft-source}}`}}'
+            name: stagecraft-source
+        name: staging
         template: deploy-staging
     name: deploy
   - container:
@@ -255,7 +332,15 @@ spec:
       command:
       - sh
       - -c
+      env:
+      - name: STAGECRAFT_SOURCE_MAIN
+        value: /sources/main
       image: {{ .Values.images.shell | quote }}
+      workingDir: /sources/main
+    inputs:
+      artifacts:
+      - name: stagecraft-source
+        path: /sources/main
     name: deploy-staging
   - dag:
       tasks:
@@ -308,7 +393,7 @@ spec:
             value: Succeeded
         name: status-success
         template: status-report
-        when: '{{`{{workflow.status}}`}} == Succeeded'
+        when: '{{`{{workflow.status}}`}} == Succeeded && ''{{`{{workflow.outputs.parameters.stagecraft-source-sha}}`}}'' =~ ''^[0-9a-f]{40}$'''
       - arguments:
           parameters:
           - name: context
@@ -319,7 +404,7 @@ spec:
             value: Failed
         name: status-failure
         template: status-report
-        when: '{{`{{workflow.status}}`}} == Failed'
+        when: '{{`{{workflow.status}}`}} == Failed && ''{{`{{workflow.outputs.parameters.stagecraft-source-sha}}`}}'' =~ ''^[0-9a-f]{40}$'''
       - arguments:
           parameters:
           - name: context
@@ -330,5 +415,5 @@ spec:
             value: Error
         name: status-error
         template: status-report
-        when: '{{`{{workflow.status}}`}} == Error'
+        when: '{{`{{workflow.status}}`}} == Error && ''{{`{{workflow.outputs.parameters.stagecraft-source-sha}}`}}'' =~ ''^[0-9a-f]{40}$'''
     name: on-exit

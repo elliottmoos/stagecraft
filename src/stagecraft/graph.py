@@ -1,7 +1,7 @@
 """Mermaid diagram of a pipeline, for reading its shape in review or docs.
 
-It shows the pipeline as authored (stages, steps, conditions, statuses, handlers, triggers), not
-the Argo templates it compiles to.
+It shows the pipeline as authored (source, stages, steps, conditions, statuses, handlers,
+triggers), not the Argo templates it compiles to.
 """
 
 import json
@@ -20,6 +20,9 @@ def mermaid(pipeline: Pipeline) -> str:
         for j, step in enumerate(stage.steps):
             lines.append(f'    s{i}b{j}["{_label(step.name, step)}"]')
         lines.append("  end")
+    if pipeline.source:
+        url, revision = (_escape(pipeline.source.url), _escape(pipeline.source.revision))
+        lines += [f'  src[("source<br/>{url}<br/>{revision}")]', "  src --> s0"]
     lines += [f"  s{i - 1} --> s{i}" for i in range(1, len(pipeline.stages))]
     for i, stage in enumerate(pipeline.stages):
         for j, step in enumerate(stage.steps):
@@ -30,7 +33,7 @@ def mermaid(pipeline: Pipeline) -> str:
     for k, trigger in enumerate(pipeline.triggers):
         schedule = " ".join(filter(None, [trigger.schedule, trigger.timezone]))
         lines.append(f'  t{k}(["{_escape(trigger.name)}<br/>{_escape(schedule)}"])')
-        lines.append(f"  t{k} -.-> s0")
+        lines.append(f"  t{k} -.-> {'src' if pipeline.source else 's0'}")
     return "\n".join(lines) + "\n"
 
 

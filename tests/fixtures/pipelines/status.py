@@ -1,21 +1,21 @@
-"""Commit statuses on pipeline, stage, and step, with a fake reporter that only echoes."""
+"""Commit statuses on pipeline, stage, and step, with a fake reporter that only echoes. The
+commit comes from the pipeline source, the same tiny public repository as the source fixture."""
 
-from stagecraft.spec import Param, Pipeline, Stage, Step
+from stagecraft.spec import Param, Pipeline, Source, Stage, Step
 
 from fixtures.actions import Shell
 
 REPORTER = Shell(
     script='echo "{{ status.context }}={{ status.state }} ({{ status.description }})'
-    ' for {{ param.repo }}@{{ param.sha }}"'
+    ' for {{ source.url }}@{{ source.sha }}"'
 )
 
 pipeline = Pipeline(
     name="status-ci",
     status="ci/pipeline",
     status_reporter=REPORTER,
+    source=Source(url="https://github.com/octocat/Hello-World.git", revision="master"),
     params=[
-        Param("repo", required=True),
-        Param("sha", required=True),
         Param("fail", default="false", enum=["true", "false"]),
         Param("deploy", default="false", enum=["true", "false"]),
         Param("sleep", default="0"),

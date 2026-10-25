@@ -71,14 +71,14 @@ class Shell(Action):
 class GitHubStatus(Action):
     """Posts a commit status. Used as a pipeline's status_reporter."""
 
-    repo: str = "{{ param.repo }}"
-    sha: str = "{{ param.sha }}"
+    url: str = "{{ source.url }}"
+    sha: str = "{{ source.sha }}"
     context: str = "{{ status.context }}"
     state: str = "{{ status.state }}"
     description: str = "{{ status.description }}"
 
     def compile(self, ctx: CompileContext) -> Container:
-        fields = ("repo", "sha", "context", "state", "description")
+        fields = ("url", "sha", "context", "state", "description")
         return Container(
             image=ctx.value("images.curl", str),
             env=[
@@ -91,7 +91,8 @@ class GitHubStatus(Action):
             ],
             command=["sh", "-c"],
             args=[
-                'curl -fsS -H "Authorization: Bearer $GITHUB_TOKEN"'
+                'REPO="${URL#https://github.com/}"; REPO="${REPO%.git}";'
+                ' curl -fsS -H "Authorization: Bearer $GITHUB_TOKEN"'
                 ' "https://api.github.com/repos/$REPO/statuses/$SHA"'
                 ' -d "{\\"context\\": \\"$CONTEXT\\", \\"state\\": \\"$STATE\\",'
                 ' \\"description\\": \\"$DESCRIPTION\\"}"'
@@ -120,17 +121,17 @@ need a `Step` each.
 ## Pipelines
 
 ```python
-from stagecraft.spec import Param, Pipeline, Stage, Step, Trigger
+from stagecraft.spec import Param, Pipeline, Source, Stage, Step, Trigger
 
 from actions import GitHubStatus, Shell
 
 pipeline = Pipeline(
     name="service-ci",
     params=[
-        Param("repo", required=True, description="Repository, as owner/name"),
-        Param("sha", required=True, description="Commit to build"),
+        Param("revision", default="main", description="Branch, tag, or commit to build"),
         Param("deploy", default="false", enum=["true", "false"]),
     ],
+    source=Source(url="https://github.com/example/service.git", revision="{{ param.revision }}"),
     status="ci/pipeline",
     status_reporter=GitHubStatus(),
     stages=[
@@ -154,14 +155,17 @@ pipeline = Pipeline(
     ],
     on_failure=[Step("report", Shell(script="echo '{{ step.name }} {{ step.outcome }}'"))],
     triggers=[
-        Trigger.cron("0 2 * * *", name="nightly", params={"repo": "example/service", "sha": "main"}),
+        Trigger.cron("0 2 * * *", name="nightly", params={"revision": "main"}),
     ],
 )
 ```
 
 - **Stages run in order; the steps in a stage run in parallel.** A failing step fails its stage
-  and the pipeline, and later stages don't run. Each step runs in its own pod, and no files are
-  shared between steps yet.
+  and the pipeline, and later stages don't run. Each step runs in its own pod.
+- **The source** is checked out once, before the first stage, at the commit `revision` resolves
+  to; every step starts in its own copy of the checkout (`/sources/main`,
+  `$STAGECRAFT_SOURCE_MAIN`). The git image and credentials Secret are the Helm values
+  `stagecraft.sources.image` and `stagecraft.sources.secret`.
 - **Params** become the Argo UI's submit form (descriptions, enums, defaults).
 - **`when`** (stage or step) skips it when false. Inside it, `{{ param.x }}` is a quoted
   string, so compare with quoted values: `"{{ param.deploy }} == 'true'"`.
@@ -173,7 +177,7 @@ pipeline = Pipeline(
 - **Commit statuses**: `status="<context>"` on the pipeline, a stage, or a step reports pending,
   then success, failure, or error, through `status_reporter`. A step skipped by `when` reports
   success with the description "Skipped", so a required check doesn't hang. Reporting is
-  best-effort and never fails the build. Statuses need required `repo` and `sha` params.
+  best-effort and never fails the build. Statuses need a source: they report on its commit.
 
 ### Placeholders
 
@@ -181,6 +185,7 @@ pipeline = Pipeline(
 |---|---|---|
 | `{{ param.x }}` | any action field, `when` | the workflow parameter |
 | `{{ values.a.b }}` | any action field, `when` | the Helm value `.Values.a.b`, a string |
+| `{{ source.url }}`, `{{ source.revision }}`, `{{ source.sha }}` | any action field, `when` | the source's URL, its revision as given, and the commit it resolved to |
 | `{{ step.name }}`, `{{ step.outcome }}` | handlers | the path (`stage` or `stage/step`), or the workflow's name in pipeline handlers; and the outcome, `succeeded` or `failed` |
 | `{{ status.context }}`, `{{ status.state }}`, `{{ status.description }}` | the `status_reporter` | the report being posted; state is `pending`, `success`, `failure`, or `error` |
 
@@ -197,7 +202,7 @@ Trigger.cron(
     "0 2 * * *",                 # cron expression or macro (@daily, @weekly, ...)
     name="nightly",              # default "cron"; names are unique per pipeline
     timezone="Europe/Amsterdam", # default: the workflow controller's time zone
-    params={"repo": "example/service", "sha": "main", "deploy": "false"},
+    params={"revision": "main", "deploy": "false"},
 )
 ```
 
@@ -249,14 +254,13 @@ pipelines refer to by name come from wherever you deploy them today.
 
 ## Known gaps
 
-- **Not built yet**: sharing files between steps (framework-managed sources, and artifacts
-  passed between steps; DESIGN.md section 16) and structured (object or array) values.
+- **Not built yet**: passing files from one step to later ones (artifacts), sources per stage
+  (DESIGN.md section 16), and structured (object or array) values.
 - **Right after an install that creates a trigger**, its first ticks can be missed: Helm applies
   the CronWorkflow before the WorkflowTemplate it references, and Argo re-checks the cron only
   minutes later (at most 20).
-- Scheduled runs need literal values for required params; a trigger can't resolve a branch's
-  latest commit for `sha`, so a commit status for a scheduled run may fail to post (reporting is
-  best-effort).
+- If the source step fails (a revision that doesn't exist, bad credentials), there's no commit,
+  so the pipeline's commit status isn't reported; the failure shows in the Argo UI.
 - A trigger can't be switched off per installation yet (no `suspend` from Helm values).
 - `argo terminate` runs no exit handlers, and `argo stop` skips the exit hook of a running step,
   so either can leave a commit status pending. Re-running the workflow updates it.

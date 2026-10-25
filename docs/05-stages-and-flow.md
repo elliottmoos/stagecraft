@@ -152,7 +152,7 @@ Stage("deploy", [...], when="{{ param.deploy }} == 'true'")
   comparison would compare the boolean `true` with the string `'true'` and always be false.)
 - `{{ values.a.b }}` works in `when` too, for conditions set per installation.
 - A skipped stage doesn't stop the pipeline: later stages still run. A skipped step runs no
-  handlers (chapter 6) and reports its status as "Skipped" (chapter 7).
+  handlers (chapter 6) and reports its status as "Skipped" (chapter 8).
 
 ## Native Argo expressions
 

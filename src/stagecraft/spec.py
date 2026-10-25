@@ -19,6 +19,8 @@ _CRON = re.compile(
 )
 # Argo rejects longer CronWorkflow names: it appends a timestamp to name each run.
 _CRON_NAME_MAX = 52
+# The task of the generated step that checks out the pipeline's source.
+_SOURCE_STEP = "source"
 
 
 def _check_name(value: str) -> str:
@@ -199,6 +201,15 @@ def _check_handlers(where: str, owner: BaseModel, fields: tuple[str, ...]) -> No
                 )
 
 
+class Source(_Model):
+    """A repository at a revision: a commit SHA, or a branch or tag, which is resolved to its
+    commit once, at the start of the run. `url` is what `git fetch` takes. Both may use
+    `{{ param.x }}` and `{{ values.a.b }}`."""
+
+    url: str
+    revision: str
+
+
 class Trigger(_Model):
     """Runs the pipeline on a schedule. Compiles to a CronWorkflow named "<pipeline>-<name>" that
     submits the pipeline's WorkflowTemplate.
@@ -234,16 +245,21 @@ class Pipeline(_Model):
     on its result. They can use `{{ step.name }}` (the workflow's name) and `{{ step.outcome }}`.
     A failing handler fails the pipeline.
 
+    `source` is checked out once, before the first stage, and every step gets the checkout as its
+    working directory (STAGECRAFT_SOURCE_MAIN). `{{ source.url }}`, `{{ source.revision }}`, and
+    `{{ source.sha }}` (the resolved commit) work in every action, handlers included.
+
     `status` contexts (on the pipeline, stages, and steps) are posted by `status_reporter`, an
     ordinary action that makes the API call. It reads `{{ status.context }}`, `{{ status.state }}`
     ("pending", "success", "failure", "error"), and `{{ status.description }}`, and the commit
-    from the required `repo` and `sha` params.
+    from `{{ source.sha }}`: statuses need a source.
 
     `triggers` run the pipeline on schedules (see Trigger).
     """
 
     name: Name
     params: list[Param] = []
+    source: Source | None = None
     stages: Annotated[list[Stage], Field(min_length=1)]
     on_success: list[Step] = []
     on_failure: list[Step] = []
@@ -266,6 +282,11 @@ class Pipeline(_Model):
     def _check_unique_names(self) -> Self:
         if dupes := _duplicates([s.name for s in self.stages]):
             raise ValueError(f"pipeline {self.name!r}: duplicate stage name {dupes[0]!r}")
+        if any(s.name == _SOURCE_STEP for s in self.stages):
+            raise ValueError(
+                f"pipeline {self.name!r}: stage name {_SOURCE_STEP!r} is reserved for the "
+                "pipeline's source step"
+            )
         if dupes := _duplicates([p.name for p in self.params]):
             raise ValueError(f"pipeline {self.name!r}: duplicate param name {dupes[0]!r}")
         _check_handlers(f"pipeline {self.name!r}", self, ("on_success", "on_failure"))
@@ -305,10 +326,9 @@ class Pipeline(_Model):
             return self
         if self.status_reporter is None:
             raise ValueError(f"pipeline {self.name!r}: status contexts need a status_reporter")
-        required = {p.name for p in self.params if p.required}
-        if not {"repo", "sha"} <= required:
+        if self.source is None:
             raise ValueError(
-                f"pipeline {self.name!r}: status contexts need required params 'repo' and 'sha' "
-                "(the commit to report on)"
+                f"pipeline {self.name!r}: status contexts need a pipeline source "
+                "(Pipeline(source=...), whose commit they report on)"
             )
         return self
