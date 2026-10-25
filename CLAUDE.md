@@ -150,8 +150,8 @@ public `octocat/Hello-World` repository from GitHub, so the kind cluster needs n
   phases. The status reporter keeps host-style states (`success`, `failure`, `error`).
 - There is no shared filesystem: each step runs in its own pod, and files will cross step
   boundaries only as artifacts (decided 2026-10-25). Don't add volumes shared between steps.
-- `DESIGN.md` section 16 is the target model for the next slices (artifacts, stage sources,
-  conditions). Read it before changing the authoring model.
+- `DESIGN.md` section 16 is the target model for the next slices (the setup step and outputs,
+  artifacts, stage sources, conditions). Read it before changing the authoring model.
 - Hera's API changes between versions, so check the pinned version's docs rather than guessing.
 - Don't generalize before two or three real pipelines exist. `DESIGN.md` section 15 lists the
   deferred features and what would justify each; update it when one is built or newly deferred.

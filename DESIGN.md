@@ -106,7 +106,7 @@ An action is a unit with a typed contract, placed by a step. The framework's job
 
 | Action or step feature | Argo mechanism |
 |---|---|
-| Artifact inputs and outputs (slice 15, section 16) | Template `inputs` / `outputs` artifacts, routed between stages through stage DAG outputs and arguments |
+| Output parameters (slice 15) and artifact inputs and outputs (slice 16; section 16) | Template `outputs` with `globalName`, read by later steps as `{{workflow.outputs.parameters/artifacts.<name>}}` |
 | Value references (`ctx.value(path, type)`, `{{ values.a.b }}`) | Helm expressions, each a required, typed property of the generated values schema |
 | Secret references | `secretKeyRef` env or volume; secret names come from Helm values, never secret contents |
 | Resources, retry, timeout, service account, node selection | Template fields, whose values come from Helm values |
@@ -225,9 +225,10 @@ Planned after the concept model (section 16, agreed 2026-10-25):
 12. Actions and steps: composition replaces `Block` inheritance; Stagecraft's outcome vocabulary for handlers.
 13. Generate the pipelines chart: `Chart.yaml`, a `values.schema.json` built from value references, and `templates/`. Removes `--values-schema`, `--values-prefix`, and the test fixture chart.
 14. Main source: the source step (revision resolved to a SHA, checkout published as an artifact), injection into every step, `{{ source.* }}`, checks on the resolved SHA, framework values under `stagecraft.sources`. Verify on kind first.
-15. Artifacts between steps: declared action inputs and outputs, `"<stage>.<step>.<artifact>"` references, cross-stage plumbing, artifact GC. Verify against kind's MinIO first.
-16. Stage sources.
-17. The condition API.
+15. The setup step and output parameters: `Pipeline(setup=...)` taking a `Step` or a `TemplateRef` to an existing WorkflowTemplate, declared outputs re-published as global outputs, `{{ setup.<output> }}` everywhere (source fields, steps, `when`, handlers, the reporter). Verify on kind first (added 2026-10-25: Argo Events submits CI runs with the whole GitHub webhook payload, which a parsing step must turn into the source's URL and commit).
+16. Artifacts and outputs between steps: declared action inputs and outputs, `"<stage>.<step>.<artifact>"` references and `{{ steps.<stage>.<step>.<output> }}` placeholders, both through global outputs, and artifact GC. Verify against kind's MinIO first.
+17. Stage sources.
+18. The condition API.
 
 Section 15 lists what was deliberately left out. Do not generalize before two or three real pipelines exist.
 
@@ -240,7 +241,7 @@ Section 15 lists what was deliberately left out. Do not generalize before two or
 - Hook semantics: field names, expression scope, workflow-level `running` hooks, effect of a failing hook on workflow status, behavior on skipped nodes.
 - Template-level versus task-level hook firing.
 - Argo CD sync order for CRDs versus chart contents, if Argo CD deploys the chart.
-- For section 16, on kind with its MinIO: artifacts routed through stage DAG outputs and inputs; an input artifact placed inside another (an artifact under the source checkout); whether a failed step's outputs are uploaded; `artifactGC` deleting objects when a workflow is deleted.
+- For section 16, on kind with its MinIO: a DAG template's outputs re-published with `globalName` (for the setup step); global output artifacts consumed by steps in later stages; an input artifact placed inside another (an artifact under the source checkout); `artifactGC` deleting objects when a workflow is deleted.
 
 ## 14. Open decisions
 
@@ -261,9 +262,8 @@ Left out on purpose, as of slice 10 (2026-10-24; updated for section 16 on 2026-
 | Values in non-string fields: integer or boolean fields such as `suspend` or a pure-int Kubernetes field | Value references are strings, and always render as strings | An action or trigger needs a Helm value in such a field (see per-installation trigger switch) |
 | Per-installation trigger switch (`suspend` from Helm values) | A boolean field, so it waits for values in non-string fields | An environment must not run a pipeline's schedule |
 | Trigger options: `concurrencyPolicy`, history limits, `startingDeadlineSeconds`, several schedules in one trigger | Argo's defaults are fine; several schedules are several triggers | A schedule overlaps its own runs, or history needs tuning |
-| Output parameters (small strings such as an image digest) | Section 16 passes files between steps as artifacts only | A step needs a small value from an earlier step, or a condition needs one |
 | Optional action inputs | Every declared input must be bound | An action is useful both with and without an earlier step's files |
-| Artifacts for reactions and the reporter (for example, uploading a failed step's test reports) | Unverified whether a failed step's outputs are uploaded, and how exit hooks would receive them | A reaction must read a step's files; prove it on kind first |
+| Artifacts for reactions and the reporter (for example, uploading a failed step's test reports) | A failed step's outputs are uploaded when its main container ran (verified in slice 14); how exit hooks would receive them is unverified | A reaction must read a step's files; prove it on kind first |
 | Opting a step out of source injection | Every step downloads the sources; cheap from an in-cluster repository | Source download time matters for steps that don't need them |
 | SSH keys and other credential kinds for sources | HTTPS with a username and token covers GitHub | A source host needs SSH, or GitHub App tokens must be minted per run |
 | Deeper source checkouts (history for `git describe`, changed-file detection) | The checkout is one commit deep, which is all builds and tests need | A step needs history or tags |
@@ -275,7 +275,7 @@ Accepted gaps (Argo or Helm behavior, not missing features) are kept with the me
 
 ## 16. Concept model and contracts
 
-Agreed 2026-10-25. This is the model slices 11 to 17 build toward (section 11); slices 11 to 14 are built. Where it conflicts with sections 5 to 8, those sections describe the current code and this section wins for new work. Points marked **open** are settled in the slice that builds them.
+Agreed 2026-10-25. This is the model slices 11 to 18 build toward (section 11); slices 11 to 14 are built. Where it conflicts with sections 5 to 8, those sections describe the current code and this section wins for new work. Points marked **open** are settled in the slice that builds them.
 
 ### Personas
 
@@ -294,6 +294,7 @@ Until slice 12, one `Block` class served both personas: the action author define
 |---|---|---|---|---|
 | **Pipeline** | A named CI process, installed once per chart | Pipeline author | One installable unit; reactions and checks for the whole run | `WorkflowTemplate`, entrypoint, `onExit` |
 | **Run input** (param) | What a run is about | Pipeline author | Declared, validated, shown in the submit form | Workflow parameters |
+| **Setup** | Work every run needs before anything else, such as parsing a webhook payload | Pipeline author, using an action or an existing WorkflowTemplate | Runs first; its declared outputs are readable everywhere, the source included | Global outputs, `templateRef` |
 | **Source** | A repository at a commit | Pipeline author (pipeline or stage) | Resolved to one commit SHA, fetched once, placed at a framework-chosen path | Git, artifacts, global outputs |
 | **Stage** | An ordered phase, and a barrier | Pipeline author | Its steps run concurrently; it fails if any step fails; later stages run after success or skip | Sub-DAG, `depends` |
 | **Step** | A named placement of an action in a stage | Pipeline author | Has an outcome; can be conditional, checked, reacted to; inputs wired | Tasks, `when`, hooks, artifact arguments |
@@ -313,7 +314,7 @@ There is no shared workspace concept any more (see "Files between steps").
 The only place an action author plugs in code.
 
 - **Configuration:** the action's own validated fields. Run inputs and Helm values arrive as placeholders in those fields; installation values also through `ctx.value(...)` in `compile`.
-- **Interface** (slice 15): the artifacts it reads and writes, each a name and a path: `outputs = {"bin": "dist/app"}`, `inputs = {"bin": "dist/app"}`. A relative path is inside the main source checkout. Every declared input is required.
+- **Interface** (slices 15 and 16): its output parameters, each a name and the file its container writes the value to (`outputs = {"digest": "/tmp/digest"}`); and the artifacts it reads and writes, each a name and a path: `outputs = {"bin": "dist/app"}`, `inputs = {"bin": "dist/app"}`. A relative path is inside the main source checkout. Every declared input is required.
 - **Output:** exactly one Hera `Container` or `Script`. Template-level settings (retries, timeouts, service account) are allowed again, since no step shares a pod.
 - **Outcome:** exit code 0 means succeeded; anything else means failed.
 - **Rules:** pure (no I/O, env reads, or globals), no Helm syntax, no workflow-level Argo. Actions don't declare sources; sources are injected (below).
@@ -334,9 +335,19 @@ Input references are `"<stage>.<step>.<artifact>"`. The render fails when a refe
 
 Decided in slice 12 (2026-10-25): `Step(name, action, when=, status=, on_success=, on_failure=, finally_=)`. A bare action in a stage or handler list is shorthand for a step named after its class in kebab case, so two actions of one class in a stage need a `Step` each. Handler steps can set only a name. The status reporter is a bare action. Built in slice 12 without `inputs`, which come with artifacts (slice 15).
 
+### The setup step and outputs
+
+Decided 2026-10-25, slice 15. Argo Events submits CI runs with the whole GitHub webhook payload as a param, and a parsing step turns it into values the run needs (the repository URL, the commit, the event, the PR number) as output parameters. So:
+
+- **`Pipeline(setup=...)`** is optional and runs first, before the source step. It takes either a `Step` (an action, like any other, declaring its outputs) or a `TemplateRef(name, template=, arguments={...}, outputs=[...])` calling an existing WorkflowTemplate as is. A template's outputs can't be inspected at render time, so a `TemplateRef` lists the output parameter names it publishes; arguments may use `{{ param.x }}` and `{{ values.a.b }}`.
+- **`{{ setup.<output> }}`** works in the source's fields, every step, `when` (quoted, like params), handlers, and the status reporter. A reference to an undeclared output fails the render.
+- **Lowering.** The setup runs inside a small generated DAG whose outputs re-publish each declared output parameter with a `globalName` (`stagecraft-setup-<output>`), so placeholders lower to `{{workflow.outputs.parameters.stagecraft-setup-<output>}}` and need no routing. A DAG template's re-published global outputs are not verified yet: prove it on kind first.
+- **Ordinary steps' outputs** use the same mechanism in slice 16: an action declares output parameters, and later steps, conditions, and handlers use `{{ steps.<stage>.<step>.<output> }}`, checked to come from an earlier stage.
+- If the setup fails, the run fails before the source step; `{{ setup.* }}` then has no value, as with a failed source step.
+
 ### Sources and revisions
 
-- **Declaring them.** A pipeline has at most one main source: `Pipeline(source=Source(url=..., revision=...))` (built in slice 14; `url` is what `git fetch` takes). A stage can request more: `Stage(..., sources=[Source(name="fixtures", url=..., revision=...)])` (slice 16). Arbitrary extra sources exist only at stage level. `url` and `revision` may use `{{ param.x }}` and `{{ values.a.b }}`. `source` is a reserved stage name.
+- **Declaring them.** A pipeline has at most one main source: `Pipeline(source=Source(url=..., revision=...))` (built in slice 14; `url` is what `git fetch` takes). A stage can request more: `Stage(..., sources=[Source(name="fixtures", url=..., revision=...)])` (slice 17). Arbitrary extra sources exist only at stage level. `url` and `revision` may use `{{ param.x }}` and `{{ values.a.b }}`. `source` is a reserved stage name.
 - **Revisions.** A revision is a commit SHA or any other reference. A reference that isn't a SHA is resolved to its head commit once, and that SHA is used from then on. The main source resolves before the first stage. A stage source resolves when its stage starts, so all of that stage's steps see one commit. `argo retry` keeps succeeded nodes, so a retried run keeps its SHAs.
 - **Fetching.** A framework-generated source step runs `git fetch --depth 1 <url> <revision>`, checks out `FETCH_HEAD`, and publishes the commit as a global output parameter and the checkout (shallow, with `.git`) as a global output artifact. Decided in slice 14 after verifying on kind: Argo's git input artifact can only reach a commit that isn't a branch tip with a full clone, which would put the whole history in the artifact every step downloads; git's own shallow fetch reaches any commit. The main source step is a task named `source` before the first stage; the first stage and the pipeline's pending report depend on it. A stage source step will be a task `source-<name>` at the start of its stage's sub-DAG, which its steps depend on. Global outputs are readable everywhere, sub-DAG tasks, exit hooks, and `onExit` included (verified), so steps take the checkout from `{{workflow.outputs.artifacts.stagecraft-source}}` with no routing through stage DAGs.
 - **Injection.** Every step gets the main source, and every step in a stage gets that stage's sources, through an input artifact the framework adds. Sources are placed at `/sources/<name>` (the main source is named `main`) and exposed as `STAGECRAFT_SOURCE_<NAME>` (uppercased, `-` as `_`). Paths are unique by construction: source names are unique within a stage and `main` is reserved. The main source's path is the working directory unless the action sets one.
@@ -350,7 +361,7 @@ Decided in slice 12 (2026-10-25): `Step(name, action, when=, status=, on_success
 
 - Each step has private scratch: its own container filesystem, including its copy of the sources.
 - Anything that crosses a step boundary is an artifact (sources included), stored in the controller's default artifact repository. Ours is S3-compatible (RustFS). Stagecraft emits no repository configuration.
-- Cross-stage references are routed by the compiler: the producing stage's sub-DAG exports the artifact as a DAG output (`from: {{tasks.<step>.outputs.artifacts.<name>}}`), the consuming stage's task passes it in as an argument, and the consuming step receives it from the stage's inputs. Authors only write `"<stage>.<step>.<artifact>"`.
+- Cross-stage references go through global outputs (revised 2026-10-25, after slice 14 verified that a step's global outputs are readable from sub-DAG tasks, exit hooks, and `onExit`): the producing step's output artifact gets a generated `globalName` (`stagecraft-<stage>-<step>-<artifact>`), and the consuming step receives it from `{{workflow.outputs.artifacts.<globalName>}}`. No routing through stage DAG outputs and inputs. Authors only write `"<stage>.<step>.<artifact>"`; the render checks the producer is in an earlier stage.
 - **Retention:** Stagecraft sets `artifactGC.strategy: OnWorkflowDeletion`. Deletion therefore needs workflows to be deleted, and the GC pods need a service account allowed to delete from the bucket. **Open:** whether both come from the controller's `workflowDefaults` (recommended: platform settings, like the artifact repository) or from the pipeline.
 - Removed: `Workspace`, the `containerset` strategy, the per-run claim, `workspace="read"/"write"`, the writer rule, and the reserved `workspace` name.
 - Caches that outlive a run are a separate concept, out of scope for now (section 15).
