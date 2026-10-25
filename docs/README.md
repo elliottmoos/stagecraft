@@ -18,7 +18,7 @@ page.
 | [4. Helm values](04-values.md) | Per-installation configuration, the generated values schema, and how Helm checks it | 3 |
 | [5. Stages, params, and conditions](05-stages-and-flow.md) | How stages run, per-run params, `when` conditions | 4 |
 | [6. Handlers](06-handlers.md) | `on_success`, `on_failure`, and `finally_` on steps, stages, and the pipeline | 5 |
-| [7. Sources](07-sources.md) | Checking out the code once per run, at one commit, for every step | 6 |
+| [7. Sources](07-sources.md) | Checking out the code once per run, at one commit, for every step; a setup step that parses webhook payloads | 6 |
 | [8. Commit statuses](08-commit-statuses.md) | GitHub checks for the pipeline and its steps, through your own reporter action | 7 |
 | [9. Triggers](09-triggers.md) | Running pipelines on a schedule | 8 |
 | [10. Shipping pipelines](10-shipping.md) | Committing and installing the generated chart; checks in CI | 9 |

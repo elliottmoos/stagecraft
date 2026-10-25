@@ -110,6 +110,7 @@ An action is a unit with a typed contract, placed by a step. The framework's job
 | Value references (`ctx.value(path, type)`, `{{ values.a.b }}`) | Helm expressions, each a required, typed property of the generated values schema |
 | Secret references | `secretKeyRef` env or volume; secret names come from Helm values, never secret contents |
 | Resources, retry, timeout, service account, node selection | Template fields, whose values come from Helm values |
+| Pipeline `setup` | A generated `setup` task first in `main`: a `steps` template running the action (or the `templateRef`) and re-publishing its output parameters with `globalName` (section 16) |
 | Pipeline `source` | A generated `source` task first in `main`: a shallow `git fetch` publishing the commit and checkout as global outputs; each step task gets the checkout as an input artifact (section 16) |
 | `when` (stage or step) | `when` on the task |
 | `on_failure`, `on_success`, `finally_` | One task-level `exit` hook calling a generated handler DAG, whose tasks are guarded by `when` on the step's status |
@@ -241,7 +242,7 @@ Section 15 lists what was deliberately left out. Do not generalize before two or
 - Hook semantics: field names, expression scope, workflow-level `running` hooks, effect of a failing hook on workflow status, behavior on skipped nodes.
 - Template-level versus task-level hook firing.
 - Argo CD sync order for CRDs versus chart contents, if Argo CD deploys the chart.
-- For section 16, on kind with its MinIO: a DAG template's outputs re-published with `globalName` (for the setup step); global output artifacts consumed by steps in later stages; an input artifact placed inside another (an artifact under the source checkout); `artifactGC` deleting objects when a workflow is deleted.
+- For section 16, on kind with its MinIO: global output artifacts consumed by steps in later stages; an input artifact placed inside another (an artifact under the source checkout); `artifactGC` deleting objects when a workflow is deleted.
 
 ## 14. Open decisions
 
@@ -275,7 +276,7 @@ Accepted gaps (Argo or Helm behavior, not missing features) are kept with the me
 
 ## 16. Concept model and contracts
 
-Agreed 2026-10-25. This is the model slices 11 to 18 build toward (section 11); slices 11 to 14 are built. Where it conflicts with sections 5 to 8, those sections describe the current code and this section wins for new work. Points marked **open** are settled in the slice that builds them.
+Agreed 2026-10-25. This is the model slices 11 to 18 build toward (section 11); slices 11 to 15 are built. Where it conflicts with sections 5 to 8, those sections describe the current code and this section wins for new work. Points marked **open** are settled in the slice that builds them.
 
 ### Personas
 
@@ -314,7 +315,7 @@ There is no shared workspace concept any more (see "Files between steps").
 The only place an action author plugs in code.
 
 - **Configuration:** the action's own validated fields. Run inputs and Helm values arrive as placeholders in those fields; installation values also through `ctx.value(...)` in `compile`.
-- **Interface** (slices 15 and 16): its output parameters, each a name and the file its container writes the value to (`outputs = {"digest": "/tmp/digest"}`); and the artifacts it reads and writes, each a name and a path: `outputs = {"bin": "dist/app"}`, `inputs = {"bin": "dist/app"}`. A relative path is inside the main source checkout. Every declared input is required.
+- **Interface** (slices 15 and 16): its output parameters, declared the Hera way on the template `compile` returns (`outputs=[Parameter(name="digest", value_from=ValueFrom(path="/tmp/digest"))]`; decided in slice 15, so actions need no second declaration); and the artifacts it reads and writes, each a name and a path: `outputs = {"bin": "dist/app"}`, `inputs = {"bin": "dist/app"}`. A relative path is inside the main source checkout. Every declared input is required.
 - **Output:** exactly one Hera `Container` or `Script`. Template-level settings (retries, timeouts, service account) are allowed again, since no step shares a pod.
 - **Outcome:** exit code 0 means succeeded; anything else means failed.
 - **Rules:** pure (no I/O, env reads, or globals), no Helm syntax, no workflow-level Argo. Actions don't declare sources; sources are injected (below).
@@ -337,11 +338,12 @@ Decided in slice 12 (2026-10-25): `Step(name, action, when=, status=, on_success
 
 ### The setup step and outputs
 
-Decided 2026-10-25, slice 15. Argo Events submits CI runs with the whole GitHub webhook payload as a param, and a parsing step turns it into values the run needs (the repository URL, the commit, the event, the PR number) as output parameters. So:
+Decided 2026-10-25, built in slice 15. Argo Events submits CI runs with the whole GitHub webhook payload as a param, and a parsing step turns it into values the run needs (the repository URL, the commit, the event, the PR number) as output parameters. So:
 
-- **`Pipeline(setup=...)`** is optional and runs first, before the source step. It takes either a `Step` (an action, like any other, declaring its outputs) or a `TemplateRef(name, template=, arguments={...}, outputs=[...])` calling an existing WorkflowTemplate as is. A template's outputs can't be inspected at render time, so a `TemplateRef` lists the output parameter names it publishes; arguments may use `{{ param.x }}` and `{{ values.a.b }}`.
+- **`Pipeline(setup=...)`** is optional and runs first, before the source step. It takes either a `Step` or a bare action (whose outputs are the output parameters its compiled template declares) or a `TemplateRef(name, template=, arguments={...}, outputs=[...])` calling an existing WorkflowTemplate as is. A template's outputs can't be inspected at render time, so a `TemplateRef` lists the output parameter names it publishes; arguments may use `{{ param.x }}` and `{{ values.a.b }}`. The setup step can't set `when`, `status`, or handlers, and gets no checkout. `setup` is a reserved stage name.
 - **`{{ setup.<output> }}`** works in the source's fields, every step, `when` (quoted, like params), handlers, and the status reporter. A reference to an undeclared output fails the render.
-- **Lowering.** The setup runs inside a small generated DAG whose outputs re-publish each declared output parameter with a `globalName` (`stagecraft-setup-<output>`), so placeholders lower to `{{workflow.outputs.parameters.stagecraft-setup-<output>}}` and need no routing. A DAG template's re-published global outputs are not verified yet: prove it on kind first.
+- **Lowering.** The setup runs inside a generated `steps` template (`setup`, with the action's template `setup-<step>`) whose outputs re-publish each output parameter with a `globalName` (`stagecraft-setup-<output>`), so placeholders lower to `{{workflow.outputs.parameters.stagecraft-setup-<output>}}` and need no routing. Verified on kind in slice 15: a `steps` template's outputs become global outputs, while a `dag` template's outputs with a `globalName` never do (the node has them, the workflow doesn't), and a container can't re-publish an input as an output without a file path.
+- **Linting.** `argo lint --offline` resolves a `templateRef` only against the files it is given (verified), so CI lints the rendered chart together with the referenced WorkflowTemplate's manifest.
 - **Ordinary steps' outputs** use the same mechanism in slice 16: an action declares output parameters, and later steps, conditions, and handlers use `{{ steps.<stage>.<step>.<output> }}`, checked to come from an earlier stage.
 - If the setup fails, the run fails before the source step; `{{ setup.* }}` then has no value, as with a failed source step.
 

@@ -104,13 +104,14 @@ built from data. See the patterns below.
 - How stages compile: each stage a sub-DAG of its steps, stages in order, one `main` DAG.
 - How handlers and statuses are wired (exit hooks, the `onExit` handler, report tasks) and what
   they report.
+- The order of a run: the setup, then the source, then the stages.
 - How the source is fetched (shallowly, once per run) and where steps find it.
-- The placeholder namespaces: `param`, `values`, `source`, `step`, `status`, and the outcome words
+- The placeholder namespaces: `param`, `values`, `setup`, `source`, `step`, `status`, and the outcome words
   (`succeeded`, `failed`, `skipped`).
 - How Helm values are rendered (always strings) and how Argo expressions are escaped.
 - The available trigger kinds (`cron`).
 - Generated names: templates are `<stage>-<step>`, and so on; `main`,
-  `on-exit`, `status-report`, `status-reporter`, and `source` are reserved, as is the
+  `on-exit`, `status-report`, `status-reporter`, `setup`, and `source` are reserved, as is the
   `stagecraft` values key.
 
 If a pipeline needs something on the fixed side, that's a change to Stagecraft. The features
@@ -212,6 +213,7 @@ a value needs quotes. Common render messages:
 | `must be a lowercase DNS label` | A stage or step name like `Verify` | Use `a-z`, `0-9`, `-` |
 | `status contexts need a status_reporter` / `need a pipeline source` | Statuses without their prerequisites | Add the reporter and a `source` |
 | `'{{ source.sha }}' needs a pipeline source` | A `{{ source.* }}` placeholder in a pipeline without one | Add `source=Source(...)` |
+| `unknown setup field 'sha'; available: [...]` | `{{ setup.sha }}` names an output the setup doesn't declare | Fix the name, or add it to the `TemplateRef`'s `outputs` |
 | `trigger 'nightly': required param 'env' has no value` | A trigger doesn't set a required param | Add it to the trigger's `params` |
 | `template name 'a-b-c' is generated twice` | Names like stage `a` + step `b-c` and stage `a-b` + step `c` | Rename a stage or step |
 | `unbalanced '{{' in rendered output` | A lone `{{` or `}}` in a field | Balance it, or move the text into a file the action reads |

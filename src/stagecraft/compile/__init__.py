@@ -11,11 +11,11 @@ from hera.workflows import DAG, CronWorkflow, Parameter, Task, WorkflowTemplate
 from hera.workflows.models import Arguments, ContinueOn, LifecycleHook, WorkflowTemplateRef
 from hera.workflows.models import Parameter as ParameterModel
 
-from stagecraft.compile import source
+from stagecraft.compile import setup, source
 from stagecraft.compile.placeholders import Scopes, lower, lower_model
 from stagecraft.context import CompileContext
 from stagecraft.errors import CompileError
-from stagecraft.spec import HANDLER_FIELDS, Action, Param, Pipeline, Stage, Step
+from stagecraft.spec import HANDLER_FIELDS, Action, Param, Pipeline, Stage, Step, TemplateRef
 
 ENTRYPOINT = "main"
 EXIT_HANDLER = "on-exit"
@@ -64,10 +64,15 @@ def compile_pipeline(pipeline: Pipeline, ctx: CompileContext) -> WorkflowTemplat
     templates = []
     main_tasks = []
     depends = None
+    if pipeline.setup:
+        lowering, setup_templates = _compile_setup(pipeline, lowering)
+        templates += setup_templates
+        main_tasks.append(Task(name=setup.TASK, template=setup_templates[0]))
+        depends = setup.TASK
     if pipeline.source:
         lowering, source_template = _compile_source(pipeline, lowering)
         templates.append(source_template)
-        main_tasks.append(Task(name=source.TASK, template=source_template))
+        main_tasks.append(Task(name=source.TASK, template=source_template, depends=depends))
         depends = source.TASK
     if pipeline.status:
         main_tasks.append(
@@ -134,15 +139,45 @@ def compile_triggers(pipeline: Pipeline, ctx: CompileContext) -> list[CronWorkfl
 @dataclasses.dataclass(frozen=True)
 class _Lowering:
     """What lowering placeholders needs: the declared param names, the compile context, and the
-    `{{ source.* }}` fields when the pipeline has a source."""
+    `{{ setup.* }}` and `{{ source.* }}` fields when the pipeline has a setup step or a source."""
 
     names: set[str]
     ctx: CompileContext
+    setup: Mapping[str, str] | None = None
     source: Mapping[str, str] | None = None
 
     @property
     def scopes(self) -> Scopes:
-        return {"source": self.source} if self.source else {}
+        scopes = {"setup": self.setup, "source": self.source}
+        return {name: fields for name, fields in scopes.items() if fields is not None}
+
+
+def _compile_setup(pipeline: Pipeline, lowering: _Lowering):
+    """The lowering with `{{ setup.* }}` fields, and the setup's templates (its wrapper first)."""
+    where = f"pipeline {pipeline.name!r}, setup"
+    spec = pipeline.setup
+    if isinstance(spec, TemplateRef):
+        arguments = {}
+        for name, value in spec.arguments.items():
+            try:
+                arguments[name] = lower(value, lowering.names, values=lowering.ctx.value)
+            except CompileError as e:
+                raise CompileError(f"{where} argument {name!r}: {e}") from e
+        step = setup.template_ref_step(spec.template, spec.name, spec.template, arguments)
+        outputs, extra = list(spec.outputs), []
+    else:
+        assert isinstance(spec, Step)
+        template = _compile_action(
+            spec.action, name=f"{setup.TASK}-{spec.name}", lowering=lowering,
+            where=f"{where} step {spec.name!r}",
+        )  # fmt: skip
+        declared = template.outputs or []
+        if not isinstance(declared, list):
+            raise CompileError(f"{where} step {spec.name!r}: outputs must be a list")
+        outputs = [o.name for o in declared if isinstance(o, Parameter)]
+        step, extra = setup.action_step(spec.name, template.name), [template]
+    fields = {output: setup.reference(output) for output in outputs}
+    return dataclasses.replace(lowering, setup=fields), [setup.wrapper(step, outputs), *extra]
 
 
 def _compile_source(pipeline: Pipeline, lowering: _Lowering):
@@ -152,7 +187,10 @@ def _compile_source(pipeline: Pipeline, lowering: _Lowering):
     for field in ("url", "revision"):
         try:
             fields[field] = lower(
-                getattr(pipeline.source, field), lowering.names, values=lowering.ctx.value
+                getattr(pipeline.source, field),
+                lowering.names,
+                lowering.scopes,
+                values=lowering.ctx.value,
             )
         except CompileError as e:
             raise CompileError(f"pipeline {pipeline.name!r}, source {field}: {e}") from e
@@ -389,7 +427,7 @@ def _check_unique_template_names(pipeline: Pipeline, templates) -> None:
             raise CompileError(
                 f"pipeline {pipeline.name!r}: template name {template.name!r} is generated twice; "
                 f"rename a stage or step ({ENTRYPOINT!r}, {EXIT_HANDLER!r}, {STATUS_REPORT!r}, "
-                f"{STATUS_REPORTER!r}, and {source.TASK!r} are reserved, and generated "
-                "'<stage>-<step>' names must not collide with other template names)"
+                f"{STATUS_REPORTER!r}, {setup.TASK!r}, and {source.TASK!r} are reserved, and "
+                "generated '<stage>-<step>' names must not collide with other template names)"
             )
         seen.add(template.name)

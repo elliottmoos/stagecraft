@@ -8,10 +8,13 @@ from pydantic import BaseModel
 from stagecraft.errors import CompileError
 
 # Only stagecraft namespaces are matched; native Argo expressions pass through untouched.
-_PLACEHOLDER = re.compile(r"\{\{\s*(param|source|step|status|values)\.([A-Za-z0-9_.-]+)\s*\}\}")
+_PLACEHOLDER = re.compile(
+    r"\{\{\s*(param|setup|source|step|status|values)\.([A-Za-z0-9_.-]+)\s*\}\}"
+)
 
 # Namespaces that only exist in some places, and why a placeholder outside them fails.
 _SCOPED = {
+    "setup": "needs a setup step (Pipeline(setup=...))",
     "source": "needs a pipeline source (Pipeline(source=...))",
     "step": "is only available in handlers (on_success, on_failure, finally_)",
     "status": "is only available in the status_reporter",
@@ -33,9 +36,9 @@ def lower(
 
     `values` resolves `{{ values.a.b }}` to a recorded value reference (CompileContext.value).
 
-    `scopes` maps each scoped namespace available here ("source" with a pipeline source, "step"
-    in handlers, "status" in the status reporter) to its fields and the Argo expressions that
-    provide them.
+    `scopes` maps each scoped namespace available here ("setup" and "source" when the pipeline
+    has them, "step" in handlers, "status" in the status reporter) to its fields and the Argo
+    expressions that provide them.
 
     `quote_params` is for `when` expressions: params (and scoped fields) are strings, but Argo
     parses a bare `true` or `42` as a boolean or number (verified on 4.1.6: `true == 'true'` is

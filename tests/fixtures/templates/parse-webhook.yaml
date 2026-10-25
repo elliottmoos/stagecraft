@@ -1,0 +1,29 @@
+# Test-only stand-in for a shared WorkflowTemplate that parses a GitHub webhook payload. Pipelines
+# call it with TemplateRef; integration tests apply it, and argo lint reads it next to the chart.
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: stagecraft-parse-webhook
+spec:
+  templates:
+  - name: parse
+    inputs:
+      parameters:
+      - name: payload
+    container:
+      image: alpine:3.22
+      command: [sh, -c]
+      args:
+      - |
+        printf '%s' "$PAYLOAD" | sed -n 's/.*"clone_url": *"\([^"]*\)".*/\1/p' > /tmp/repo_url
+        printf '%s' "$PAYLOAD" | sed -n 's/.*"after": *"\([0-9a-f]*\)".*/\1/p' > /tmp/sha
+        test -s /tmp/repo_url && test -s /tmp/sha
+      env:
+      - name: PAYLOAD
+        value: "{{inputs.parameters.payload}}"
+    outputs:
+      parameters:
+      - name: repo_url
+        valueFrom: {path: /tmp/repo_url}
+      - name: sha
+        valueFrom: {path: /tmp/sha}

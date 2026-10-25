@@ -57,7 +57,10 @@ kubeconform -strict -schema-location default \
 - `git diff --exit-code` catches a pipeline change committed without re-rendering.
 - `helm template` validates the environment's values against the generated schema, so a missing
   or wrongly typed value fails here, not at install time.
-- `argo lint` checks the workflows the way the Argo controller will.
+- `argo lint` checks the workflows the way the Argo controller will. If a pipeline's setup calls
+  an existing WorkflowTemplate (`TemplateRef`), pass that template's manifest too
+  (`argo lint --offline rendered.yaml parse-webhook.yaml`): lint only resolves references against
+  the files it's given.
 - kubeconform needs JSON schemas for Argo's CRDs (`WorkflowTemplate`, `CronWorkflow`), for
   example from a CRD schema catalog or generated from the Argo release you run.
 

@@ -6,7 +6,7 @@ Everything in one place. The [guide](README.md) explains each item in context.
 
 | Import | What |
 |---|---|
-| `from stagecraft.spec import Pipeline, Source, Stage, Step, Action, Param, Trigger` | The authoring models |
+| `from stagecraft.spec import Pipeline, Source, Stage, Step, Action, Param, TemplateRef, Trigger` | The authoring models |
 | `from stagecraft.context import CompileContext` | The `ctx` passed to `Action.compile` |
 | `from stagecraft.compile import compile_pipeline, compile_triggers` | Compile in tests |
 | `from stagecraft.chart import render_chart` | The generated chart's files, by path |
@@ -19,7 +19,8 @@ Everything in one place. The [guide](README.md) explains each item in context.
 |---|---|---|---|
 | `name` | str | required | DNS label; unique among pipelines; the `WorkflowTemplate`'s name |
 | `params` | list[Param] | `[]` | Unique names |
-| `source` | Source | None | Checked out once, before the first stage, for every step |
+| `setup` | Step \| Action \| TemplateRef | None | Runs first; its outputs work everywhere as `{{ setup.<output> }}`; no `when`, `status`, or handlers |
+| `source` | Source | None | Checked out once, after the setup and before the first stage, for every step |
 | `stages` | list[Stage] | required | At least one; unique names; run in order |
 | `on_success`, `on_failure` | list[Step \| Action] | `[]` | Run after the run ends; a failure here fails the run |
 | `status` | str | None | Commit-status context for the whole run |
@@ -27,7 +28,18 @@ Everything in one place. The [guide](README.md) explains each item in context.
 | `triggers` | list[Trigger] | `[]` | Unique names |
 
 Statuses also require a `source`, whose commit they report on. Status contexts are unique across
-the pipeline. `source` is a reserved stage name.
+the pipeline. `setup` and `source` are reserved stage names.
+
+## `TemplateRef(name, /, ...)`
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `name` | str | required (positional) | The WorkflowTemplate, already installed |
+| `template` | str | required | The template in it to call |
+| `arguments` | dict[str, str] | `{}` | Its input parameters; may use `{{ param.x }}` and `{{ values.a.b }}` |
+| `outputs` | list[str] | `[]` | The output parameters it publishes, the only ones `{{ setup.<output> }}` can name |
+
+Lint the rendered chart together with the referenced WorkflowTemplate's manifest.
 
 ## `Source(url=, revision=)`
 
@@ -123,6 +135,7 @@ chart it generated (a `Chart.yaml` with the annotation).
 |---|---|---|
 | `{{ param.x }}` | action fields, `when` | `{{workflow.parameters.x}}`; quoted in `when` |
 | `{{ values.a.b }}` | action fields, `when`, trigger params, source fields | A Helm expression for `.Values.a.b` |
+| `{{ setup.<output> }}` | action fields, `when`, source fields, with a `setup` | The setup's output parameter, as a global output; quoted in `when` |
 | `{{ source.url }}`, `{{ source.revision }}`, `{{ source.sha }}` | action fields, `when`, with a `source` | The source's URL and revision as given, and the commit it resolved to; quoted in `when` |
 | `{{ step.name }}`, `{{ step.outcome }}` | handler action fields | The path (`stage` or `stage/step`), or the run's name in pipeline handlers; and `succeeded` or `failed` |
 | `{{ status.context }}`, `{{ status.state }}`, `{{ status.description }}` | `status_reporter` fields | The report being posted |
@@ -147,6 +160,7 @@ Values always render as strings.
 | Template | Name |
 |---|---|
 | Entrypoint DAG | `main` |
+| The setup step and its action | `setup`, `setup-<step>` |
 | The source step | `source` |
 | A stage's DAG | `<stage>` |
 | A step | `<stage>-<step>` |

@@ -73,6 +73,10 @@ Facts confirmed by experiment or by `tests/integration`. Re-check them when bump
   container ran, or stays literal (`{{workflow.outputs.parameters.x}}`) when it never started.
   Neither is an error, so guards test its shape (`=~ '^[0-9a-f]{40}$'`).
 - A failed step's output artifacts are still uploaded when its main container ran.
+- A `steps` template's outputs with a `globalName` become global outputs; a `dag` template's
+  never do (the node gets them, the workflow doesn't). So the setup wrapper is a `steps` template.
+- `argo lint --offline` resolves a `templateRef` only against the files it's given; lint rendered
+  output together with the referenced WorkflowTemplate (`tests/fixtures/templates/`).
 - Output artifacts can come from the main container's own filesystem (no volume needed).
 - On the kind quick-start, the default artifact repository is the namespace's MinIO
   (`artifact-repositories` configmap), not the controller config's plugin entry.
@@ -109,7 +113,7 @@ kubeconform on the result. By hand:
 
 ```sh
 helm template fixture <chart> -f tests/fixtures/values.yaml > out/rendered.yaml
-argo lint --offline out/rendered.yaml
+argo lint --offline out/rendered.yaml tests/fixtures/templates/*.yaml
 kubeconform -strict -summary -schema-location default \
   -schema-location 'tests/fixtures/crd-schemas/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
   out/rendered.yaml
@@ -150,8 +154,8 @@ public `octocat/Hello-World` repository from GitHub, so the kind cluster needs n
   phases. The status reporter keeps host-style states (`success`, `failure`, `error`).
 - There is no shared filesystem: each step runs in its own pod, and files will cross step
   boundaries only as artifacts (decided 2026-10-25). Don't add volumes shared between steps.
-- `DESIGN.md` section 16 is the target model for the next slices (the setup step and outputs,
-  artifacts, stage sources, conditions). Read it before changing the authoring model.
+- `DESIGN.md` section 16 is the target model for the next slices (artifacts and step outputs,
+  stage sources, conditions). Read it before changing the authoring model.
 - Hera's API changes between versions, so check the pinned version's docs rather than guessing.
 - Don't generalize before two or three real pipelines exist. `DESIGN.md` section 15 lists the
   deferred features and what would justify each; update it when one is built or newly deferred.
@@ -171,7 +175,7 @@ tests/unit/         plain functions, escaping, chart and schema generation
 tests/contract/     value references: recording, conflicts, rendering
 tests/snapshots/    compile + rendered-template snapshots
 tests/integration/  kind + Argo behavior tests (marked `integration`)
-tests/fixtures/     minimal actions, fixture pipelines, test-only values, CRD schemas
+tests/fixtures/     minimal actions, fixture pipelines, test-only values and WorkflowTemplates, CRD schemas
 docs/               user guide: numbered chapters (one cumulative example project) + reference
 ```
 

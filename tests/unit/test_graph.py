@@ -1,5 +1,5 @@
 from stagecraft.graph import mermaid
-from stagecraft.spec import Param, Pipeline, Source, Stage, Step, Trigger
+from stagecraft.spec import Param, Pipeline, Source, Stage, Step, TemplateRef, Trigger
 
 from fixtures.actions import Shell
 
@@ -120,3 +120,28 @@ def test_the_source_is_checked_out_before_the_first_stage():
     assert '  src[("source<br/>https://example.com/repo.git<br/>{{ param.rev }}")]' in lines
     assert "  src --> s0" in lines
     assert "  t0 -.-> src" in lines
+
+
+def test_the_setup_runs_before_the_source():
+    pipeline = Pipeline(
+        name="p",
+        setup=TemplateRef("parse-webhook", template="parse", outputs=["sha"]),
+        source=Source(url="https://example.com/repo.git", revision="{{ setup.sha }}"),
+        stages=[Stage("s", [Shell(script="")])],
+        triggers=[Trigger.cron("@daily")],
+    )
+
+    lines = mermaid(pipeline).splitlines()
+
+    assert '  setup[["setup<br/>parse-webhook/parse"]]' in lines
+    assert "  setup --> src" in lines
+    assert "  t0 -.-> setup" in lines
+
+
+def test_an_action_setup_is_labelled_with_its_step_name():
+    pipeline = Pipeline(name="p", setup=Shell(script=""), stages=[Stage("s", [Shell(script="")])])
+
+    lines = mermaid(pipeline).splitlines()
+
+    assert '  setup[["setup<br/>shell"]]' in lines
+    assert "  setup --> s0" in lines

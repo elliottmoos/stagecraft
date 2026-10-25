@@ -48,6 +48,42 @@ Things to know:
   before any stage, and `{{ source.sha }}` has no value.
 - **`source` is a reserved stage name.**
 
+## When the revision comes from a webhook: the setup step
+
+Runs started by Argo Events often receive the whole GitHub webhook payload as one param, and the
+repository and commit have to be parsed out of it first. A **setup step** runs before everything
+else, the source included, and its output parameters work everywhere as `{{ setup.<output> }}`:
+
+```python
+Pipeline(
+    ...,
+    params=[Param("payload", required=True, description="The GitHub webhook payload")],
+    setup=TemplateRef(
+        "parse-webhook",                          # an existing WorkflowTemplate
+        template="parse",
+        arguments={"payload": "{{ param.payload }}"},
+        outputs=["repo_url", "sha", "event"],
+    ),
+    source=Source(url="{{ setup.repo_url }}", revision="{{ setup.sha }}"),
+    stages=[..., Stage("deploy", [...], when="{{ setup.event }} == 'push'")],
+)
+```
+
+- **Two forms.** `TemplateRef(name, template=, arguments=, outputs=)` calls a template of a
+  WorkflowTemplate that's already installed, as is. Or the setup is an ordinary action, bare or in
+  a `Step`, like `setup=ParseWebhook(payload="{{ param.payload }}")`.
+- **Outputs.** An action's outputs are the output parameters its `compile` declares
+  (`Container(..., outputs=[Parameter(name="sha", value_from=ValueFrom(path="/tmp/sha"))])`). A
+  `TemplateRef` lists them in `outputs`, since Stagecraft can't look inside the template.
+  Referring to any other name fails the render.
+- **Everywhere.** `{{ setup.<output> }}` works in the source's fields, every step, `when` (quoted,
+  like params), handlers, and the status reporter.
+- **A plain step.** The setup can't set `when`, `status`, or handlers, and gets no checkout (it
+  runs before the source). If it fails, the run fails before anything else runs.
+- **Linting.** `argo lint` checks a `TemplateRef` against the files it's given, so lint the
+  rendered chart together with the referenced WorkflowTemplate's manifest (chapter 10).
+- **`setup` is a reserved stage name.**
+
 ## Settings: the git image and credentials
 
 The source step needs an image with `git` and `sh`, and credentials for private repositories.
@@ -134,5 +170,7 @@ kubectl create secret generic github-checkout -n argo \
 - Every step starts in the checkout (`/sources/main`, `$STAGECRAFT_SOURCE_MAIN`); handlers and the
   reporter get only `{{ source.url }}`, `{{ source.revision }}`, and `{{ source.sha }}`.
 - The installation supplies `stagecraft.sources.image` and `stagecraft.sources.secret`.
+- A setup step (`TemplateRef` or an action) runs first; its outputs work everywhere as
+  `{{ setup.<output> }}`, the source's fields included.
 
 Next: [8. Commit statuses](08-commit-statuses.md).

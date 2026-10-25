@@ -17,6 +17,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 # Values for every test installation: a superset of what the fixture pipelines reference.
 FIXTURE_VALUES = FIXTURES / "values.yaml"
 CRD_SCHEMAS = FIXTURES / "crd-schemas"
+# Existing WorkflowTemplates that fixture pipelines call through TemplateRef.
+FIXTURE_TEMPLATES = FIXTURES / "templates"
 
 
 def require_tool(name: str) -> str:

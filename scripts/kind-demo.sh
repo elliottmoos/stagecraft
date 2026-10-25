@@ -23,6 +23,8 @@ fi
 # Fixture pipelines import their actions relative to tests/, as pipeline files do in a repo.
 (cd "${root}/tests" && uv run stagecraft render fixtures/pipelines --out "${chart}" \
   --chart-name "${release}" > /dev/null)
+# Existing WorkflowTemplates the fixture pipelines call through TemplateRef.
+kubectl --context "${context}" -n "${namespace}" apply -f "${root}/tests/fixtures/templates/" > /dev/null
 helm upgrade --install "${release}" "${chart}" -f "${root}/tests/fixtures/values.yaml" \
   --kube-context "${context}" -n "${namespace}" > /dev/null
 

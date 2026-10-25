@@ -19,8 +19,11 @@ _CRON = re.compile(
 )
 # Argo rejects longer CronWorkflow names: it appends a timestamp to name each run.
 _CRON_NAME_MAX = 52
-# The task of the generated step that checks out the pipeline's source.
+# The tasks of the generated steps that run the pipeline's setup and check out its source.
+_SETUP_STEP = "setup"
 _SOURCE_STEP = "source"
+# Output parameter names, as `{{ setup.<name> }}` references them.
+_OUTPUT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
 
 def _check_name(value: str) -> str:
@@ -201,6 +204,30 @@ def _check_handlers(where: str, owner: BaseModel, fields: tuple[str, ...]) -> No
                 )
 
 
+class TemplateRef(_Model):
+    """A template of an existing WorkflowTemplate, called as is: `name` is the WorkflowTemplate,
+    `template` the template in it. `arguments` are its input parameters, and may use
+    `{{ param.x }}` and `{{ values.a.b }}`. `outputs` lists the output parameters it publishes,
+    which Stagecraft can't inspect; only those can be referenced."""
+
+    name: Name
+    template: Name
+    arguments: dict[str, str] = {}
+    outputs: list[str] = []
+
+    def __init__(self, name: str, /, **data) -> None:
+        super().__init__(name=name, **data)
+
+    @model_validator(mode="after")
+    def _check_outputs(self) -> Self:
+        for output in self.outputs:
+            if not _OUTPUT_NAME.fullmatch(output):
+                raise ValueError(f"output name {output!r} must match {_OUTPUT_NAME.pattern}")
+        if dupes := _duplicates(self.outputs):
+            raise ValueError(f"duplicate output name {dupes[0]!r}")
+        return self
+
+
 class Source(_Model):
     """A repository at a revision: a commit SHA, or a branch or tag, which is resolved to its
     commit once, at the start of the run. `url` is what `git fetch` takes. Both may use
@@ -245,6 +272,10 @@ class Pipeline(_Model):
     on its result. They can use `{{ step.name }}` (the workflow's name) and `{{ step.outcome }}`.
     A failing handler fails the pipeline.
 
+    `setup` runs first, before the source: a step (an action) or a TemplateRef to an existing
+    WorkflowTemplate. Its output parameters work everywhere as `{{ setup.<output> }}`, the
+    source's fields included. It can't set when, status, or handlers.
+
     `source` is checked out once, before the first stage, and every step gets the checkout as its
     working directory (STAGECRAFT_SOURCE_MAIN). `{{ source.url }}`, `{{ source.revision }}`, and
     `{{ source.sha }}` (the resolved commit) work in every action, handlers included.
@@ -259,6 +290,7 @@ class Pipeline(_Model):
 
     name: Name
     params: list[Param] = []
+    setup: Step | TemplateRef | None = None
     source: Source | None = None
     stages: Annotated[list[Stage], Field(min_length=1)]
     on_success: list[Step] = []
@@ -278,15 +310,31 @@ class Pipeline(_Model):
     def _wrap_handlers(cls, items: object) -> object:
         return _as_steps(items)
 
+    @field_validator("setup", mode="before")
+    @classmethod
+    def _wrap_setup(cls, setup: object) -> object:
+        return _as_steps([setup])[0] if isinstance(setup, Action) else setup
+
+    @model_validator(mode="after")
+    def _check_setup(self) -> Self:
+        setup = self.setup
+        has_handlers = isinstance(setup, Step) and any(getattr(setup, f) for f in HANDLER_FIELDS)
+        if isinstance(setup, Step) and (setup.when or setup.status or has_handlers):
+            raise ValueError(
+                f"pipeline {self.name!r}: the setup step cannot set when, status, or handlers"
+            )
+        return self
+
     @model_validator(mode="after")
     def _check_unique_names(self) -> Self:
         if dupes := _duplicates([s.name for s in self.stages]):
             raise ValueError(f"pipeline {self.name!r}: duplicate stage name {dupes[0]!r}")
-        if any(s.name == _SOURCE_STEP for s in self.stages):
-            raise ValueError(
-                f"pipeline {self.name!r}: stage name {_SOURCE_STEP!r} is reserved for the "
-                "pipeline's source step"
-            )
+        for reserved in (_SETUP_STEP, _SOURCE_STEP):
+            if any(s.name == reserved for s in self.stages):
+                raise ValueError(
+                    f"pipeline {self.name!r}: stage name {reserved!r} is reserved for the "
+                    f"pipeline's {reserved} step"
+                )
         if dupes := _duplicates([p.name for p in self.params]):
             raise ValueError(f"pipeline {self.name!r}: duplicate param name {dupes[0]!r}")
         _check_handlers(f"pipeline {self.name!r}", self, ("on_success", "on_failure"))

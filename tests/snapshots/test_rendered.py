@@ -5,9 +5,10 @@ from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 
 from stagecraft.serialize import serialize
 
-from fixtures.pipelines import escaping, handlers, hooks, smoke, source, status, triggers
+from fixtures.pipelines import escaping, handlers, hooks, setup, smoke, source, status, triggers
 from support import (
     CRD_SCHEMAS,
+    FIXTURE_TEMPLATES,
     build_chart,
     helm_template,
     manifests,
@@ -24,6 +25,8 @@ PIPELINES = [
     status.pipeline,
     triggers.pipeline,
     source.pipeline,
+    setup.pipeline,
+    setup.action_pipeline,
 ]
 
 
@@ -64,7 +67,9 @@ def _identity(doc: dict) -> tuple[str, str]:
 def test_argo_lint_accepts_helm_output(helm_output):
     out, _ = helm_output
 
-    run(require_tool("argo"), "lint", "--offline", "--output", "simple", str(out))
+    # Templates the pipelines reference (TemplateRef) must be linted alongside them.
+    templates = [str(t) for t in sorted(FIXTURE_TEMPLATES.glob("*.yaml"))]
+    run(require_tool("argo"), "lint", "--offline", "--output", "simple", str(out), *templates)
 
 
 def test_kubeconform_accepts_helm_output(helm_output):
