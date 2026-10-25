@@ -97,30 +97,13 @@ pipeline = Pipeline(
 )
 ```
 
-`Make` asks for a new value, `images.build`, so the chart's contract grows:
+`Make` uses a new value, `images.build`. The generated schema now requires it, so every
+installation's values must set it:
 
-```yaml file=chart/values.yaml
+```yaml file=values/staging.yaml
 images:
   shell: alpine:3.22
   build: golang:1.25
-```
-
-```json file=chart/values.schema.json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["images"],
-  "properties": {
-    "images": {
-      "type": "object",
-      "required": ["shell", "build"],
-      "properties": {
-        "shell": {"type": "string"},
-        "build": {"type": "string"}
-      }
-    }
-  }
-}
 ```
 
 ## Steps and names
@@ -224,35 +207,21 @@ Two more consequences:
 
 ## Testing actions
 
-An action is a plain class, so test it with plain pytest. Give `compile` a small contract with just
-the values the action needs:
+An action is a plain class, so test it with plain pytest. Give `compile` a fresh
+`CompileContext`; afterwards, `ctx.references` lists every Helm value the action used and its
+type, which also documents what an installation must provide:
 
 ```python file=tests/test_actions.py
 import pytest
 from pydantic import ValidationError
 
 from stagecraft.context import CompileContext
-from stagecraft.contract import ValuesContract
-from stagecraft.errors import CompileError
 
 from actions import Make
 
-SCHEMA = {
-    "type": "object",
-    "required": ["images"],
-    "properties": {
-        "images": {
-            "type": "object",
-            "required": ["build"],
-            "properties": {"build": {"type": "string"}},
-        }
-    },
-}
-CONTEXT = CompileContext(ValuesContract(SCHEMA))
-
 
 def test_make_runs_its_target():
-    container = Make(target="lint").compile(CONTEXT)
+    container = Make(target="lint").compile(CompileContext())
 
     assert container.command == ["make"]
     assert container.args == ["lint"]
@@ -263,11 +232,12 @@ def test_make_accepts_one_target_only():
         Make(target="lint test")
 
 
-def test_make_needs_the_build_image_from_the_chart():
-    empty = CompileContext(ValuesContract({"type": "object", "properties": {}}))
+def test_make_needs_the_build_image():
+    ctx = CompileContext()
 
-    with pytest.raises(CompileError, match="images.build"):
-        Make(target="lint").compile(empty)
+    Make(target="lint").compile(ctx)
+
+    assert ctx.references == {"images.build": str}
 ```
 
 Calling `compile` directly skips placeholder replacement. To test how an action behaves inside a
@@ -285,6 +255,6 @@ package (an action library), version it, and depend on it like any other library
 - A step places an action in a stage under a name; a bare action is named after its class.
 - `compile` can set anything Hera allows; it must be pure and get installation details from `ctx`.
 - Placeholders work in fields, not in what `compile` returns. Design fields accordingly.
-- Test actions by calling `compile` with a small contract.
+- Test actions by calling `compile` with a fresh `CompileContext`, and check `ctx.references`.
 
-Next: [4. Helm values and the contract](04-values.md).
+Next: [4. Helm values](04-values.md).

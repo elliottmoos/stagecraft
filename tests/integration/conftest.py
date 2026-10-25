@@ -10,7 +10,7 @@ import pytest
 
 from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from support import build_chart, require_tool, run, unique_name
+from support import FIXTURE_VALUES, build_chart, require_tool, run, unique_name
 
 CONTEXT = "kind-stagecraft"
 NAMESPACE = "argo"
@@ -18,7 +18,7 @@ RELEASE = "stagecraft-fixture"
 
 
 class Argo:
-    """Install pipelines through the fixture chart and drive workflows with the argo CLI."""
+    """Install pipelines as a generated chart and drive workflows with the argo CLI."""
 
     def __init__(self, tmp_path: Path) -> None:
         self.tmp_path = tmp_path
@@ -27,7 +27,7 @@ class Argo:
 
     def install(self, pipelines: list[Pipeline]) -> None:
         chart = build_chart(self.tmp_path, pipelines)
-        run(self.helm, "upgrade", "--install", RELEASE, str(chart),
+        run(self.helm, "upgrade", "--install", RELEASE, str(chart), "-f", str(FIXTURE_VALUES),
             "--kube-context", CONTEXT, "-n", NAMESPACE)  # fmt: skip
 
     def submit(self, template: str, params: dict[str, str] | None = None) -> str:

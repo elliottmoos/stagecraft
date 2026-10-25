@@ -48,8 +48,8 @@ Stagecraft's rules.
 | Moment | What happens | Who does it |
 |---|---|---|
 | **Author time** | You write actions and pipelines in Python. | You, in a pipelines repo |
-| **Render time** | `stagecraft render` compiles each pipeline into an Argo Workflows `WorkflowTemplate` (plus a `CronWorkflow` per schedule) and checks every Helm value it uses against the chart's contract. | Stagecraft |
-| **Install time** | Helm fills in the values for one environment and installs the templates into a cluster. | Helm, from a chart repo |
+| **Render time** | `stagecraft render` compiles your pipelines into a Helm chart: an Argo Workflows `WorkflowTemplate` per pipeline (plus a `CronWorkflow` per schedule), and a values schema listing every Helm value they use. | Stagecraft |
+| **Install time** | Helm checks one environment's values against that schema, fills them in, and installs the templates into a cluster. | Helm |
 | **Run time** | Someone submits the template in the Argo UI (or a schedule fires), and Argo runs it. | Argo Workflows |
 
 Two consequences:
@@ -66,19 +66,21 @@ Two consequences:
 
 ```mermaid
 flowchart LR
-  P["pipelines repo<br/>actions + pipelines (Python)"] -- stagecraft render --> T["chart/templates/*.yaml"]
-  S["chart repo<br/>values.schema.json"] -. the contract .-> P
-  T --> H["helm install<br/>(per environment values)"]
+  P["pipelines repo<br/>actions + pipelines (Python)"] -- stagecraft render --> C["chart/<br/>Chart.yaml, values.schema.json, templates/"]
+  V["values per installation<br/>(values/staging.yaml, ...)"] --> H
+  C --> H["helm install"]
   H --> A["Argo Workflows"]
 ```
 
 - The **pipelines repo** holds your actions and pipeline files. It is a plain Python project.
-- The **chart repo** holds a Helm chart that installs the rendered templates. It owns
-  `values.yaml` and `values.schema.json`.
-- The chart's **`values.schema.json` is the contract** between the two. A pipeline may only use a
-  Helm value the schema guarantees; anything else fails at render time, long before a run.
+- **`stagecraft render` writes a complete Helm chart** from them, installed as its own release.
+  Its `values.schema.json` is generated: every Helm value the pipelines use is required, with
+  the type they use it as.
+- **Values come at install time**, one file per environment. Helm checks them against the
+  generated schema, so a missing or wrongly typed value fails the install, before any run.
 
-Stagecraft never writes `Chart.yaml`, `values.yaml`, or the schema. It only writes templates.
+Stagecraft writes `Chart.yaml`, `values.schema.json`, and `templates/`, and nothing else: never a
+`values.yaml`, and never the Secrets or service accounts the pipelines refer to by name.
 
 ## What you write, what you configure, what is fixed
 
@@ -99,8 +101,8 @@ actions with a small, fixed vocabulary.
 | Stage | Steps that run in parallel. |
 | Pipeline | Ordered stages, plus params, handlers, statuses, and triggers. |
 | Param | A per-run input, shown in the Argo UI's submit form. |
-| Helm value | A per-installation input from the chart's values. |
-| Values contract | The chart's `values.schema.json`. |
+| Helm value | A per-installation input, supplied when the chart is installed. |
+| Values schema | The chart's `values.schema.json`, generated from the Helm values the pipelines use. |
 | Placeholder | `{{ param.x }}`, `{{ values.a.b }}`, `{{ step.x }}`, or `{{ status.x }}` in an action's fields. |
 | Handler | A step that runs after a stage, step, or pipeline finishes (`on_success`, `on_failure`, `finally_`). |
 | Outcome | How a step, stage, or run ended: `succeeded`, `failed`, or `skipped`. |

@@ -8,9 +8,9 @@ Everything in one place. The [guide](README.md) explains each item in context.
 |---|---|
 | `from stagecraft.spec import Pipeline, Stage, Step, Action, Param, Trigger` | The authoring models |
 | `from stagecraft.context import CompileContext` | The `ctx` passed to `Action.compile` |
-| `from stagecraft.contract import ValuesContract` | A values contract, for action tests |
 | `from stagecraft.compile import compile_pipeline, compile_triggers` | Compile in tests |
-| `from stagecraft.errors import CompileError` | Raised for contract and composition errors at compile time |
+| `from stagecraft.chart import render_chart` | The generated chart's files, by path |
+| `from stagecraft.errors import CompileError` | Raised for value-reference and composition errors at compile time |
 | `from hera.workflows import Container, Script, Env, SecretEnv, ...` | What `compile` returns (Hera 7.1.0) |
 
 ## `Pipeline`
@@ -80,13 +80,25 @@ Param fields are literal: placeholders aren't replaced in them.
 | `params` | dict[str, str] | `{}` | Declared params only; must set every required param; values in `enum` unless they use `{{ values.a.b }}` |
 | `timezone` | str | None | IANA name; the controller's time zone if unset |
 
-## `CompileContext.value(path, expected=None)`
+## `CompileContext.value(path, expected=str)`
 
-Returns a reference to the Helm value at `path` (dotted, relative to `--values-prefix`).
-`expected` is `str`, `int`, `float`, or `bool`; `None` accepts any scalar. Raises `CompileError`
-unless the schema guarantees the value: declared and required at every level, non-null, a single
-scalar type matching `expected`, reached through `properties` and local `$ref`s only, with
-identifier keys.
+Returns a reference to the Helm value at `path` (dotted) and records it in `ctx.references`
+(`{path: type}`), from which the chart's `values.schema.json` is generated. `expected` is `str`,
+`int`, `float`, or `bool`; `{{ values.a.b }}` placeholders are `str`. Raises `CompileError` if
+the path isn't dotted identifiers, is under the reserved `stagecraft` key, is already used with
+another type, or is also used as an object (`a` and `a.b`). `CompileContext()` takes no
+arguments.
+
+## The generated chart
+
+| File | Contents |
+|---|---|
+| `Chart.yaml` | `apiVersion: v2`, the chart name (`--chart-name`, default `pipelines`), version `0.0.0`, annotation `stagecraft/generated: "true"` |
+| `values.schema.json` | Every referenced value, required at every level, typed `string`, `integer`, `number`, or `boolean`; `global` allowed |
+| `templates/<pipeline>.yaml` | The `WorkflowTemplate`, then a `CronWorkflow` per trigger |
+
+`render` replaces these and nothing else. It writes only into a missing or empty directory, or a
+chart it generated (a `Chart.yaml` with the annotation).
 
 ## Placeholders
 
@@ -130,8 +142,8 @@ Two generated names colliding fails the render.
 
 | Command | Does |
 |---|---|
-| `stagecraft render <paths> --values-schema <file> --out <dir> [--values-prefix <key>]` | Compile, validate, and write `<pipeline>.yaml` per pipeline; writes nothing if any fails |
-| `stagecraft check <paths> --values-schema <file> [--values-prefix <key>]` | The same, without writing |
+| `stagecraft render <paths> --out <dir> [--chart-name <name>]` | Compile and write the chart; writes nothing if any pipeline fails |
+| `stagecraft check <paths>` | Compile, without writing |
 | `stagecraft graph <paths> [--pipeline <name>]` | Mermaid diagram of a pipeline |
 | `stagecraft contexts <paths>` | `<pipeline><TAB><context>` per status context |
 | `stagecraft version` | Stagecraft and Hera versions |

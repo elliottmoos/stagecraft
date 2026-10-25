@@ -163,7 +163,7 @@ Stagecraft only replaces its own placeholders (`param`, `values`, `step`, `statu
 Step("whoami", Shell(script="echo running {{workflow.name}}"))
 ```
 
-Use them sparingly: Stagecraft can't check them, and `argo lint` in the chart's CI is the first
+Use them sparingly: Stagecraft can't check them, and `argo lint` in CI is the first
 place a typo would show up.
 
 ## Recap

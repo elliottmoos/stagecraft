@@ -202,10 +202,10 @@ pipeline = Pipeline(
 )
 ```
 
-The chart adds the curl image and the token Secret's name. The Secret itself (with a `token` key)
-is created separately, never by Stagecraft:
+Installations add the curl image and the token Secret's name. The Secret itself (with a `token`
+key) is created separately, never by Stagecraft:
 
-```yaml file=chart/values.yaml
+```yaml file=values/staging.yaml
 images:
   shell: alpine:3.22
   build: golang:1.25
@@ -217,50 +217,6 @@ notify:
   channel: "#ci"
 github:
   tokenSecret: github-token
-```
-
-```json file=chart/values.schema.json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["images", "build", "notify", "github"],
-  "properties": {
-    "images": {
-      "type": "object",
-      "required": ["shell", "build", "curl"],
-      "properties": {
-        "shell": {"$ref": "#/$defs/image"},
-        "build": {"$ref": "#/$defs/image"},
-        "curl": {"$ref": "#/$defs/image"}
-      }
-    },
-    "build": {
-      "type": "object",
-      "required": ["cpu", "memory"],
-      "properties": {
-        "cpu": {"type": "string", "description": "CPU request for build steps"},
-        "memory": {"type": "string", "description": "Memory request for build steps"}
-      }
-    },
-    "notify": {
-      "type": "object",
-      "required": ["channel"],
-      "properties": {
-        "channel": {"type": "string", "description": "Chat channel for build notifications"}
-      }
-    },
-    "github": {
-      "type": "object",
-      "required": ["tokenSecret"],
-      "properties": {
-        "tokenSecret": {"type": "string", "description": "Secret with a 'token' key for the GitHub API"}
-      }
-    }
-  },
-  "$defs": {
-    "image": {"type": "string", "description": "A container image reference"}
-  }
-}
 ```
 
 ## Setting up branch protection

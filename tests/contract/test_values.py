@@ -1,133 +1,115 @@
-"""Value references validated against a values contract (DESIGN.md sections 8 and 9.3)."""
+"""Value references: recorded with their types, checked for consistency, and rendered as Helm
+expressions (DESIGN.md sections 8 and 16)."""
 
 import pytest
+from hera.workflows import Container
 
 from stagecraft.compile import compile_pipeline
 from stagecraft.context import CompileContext
-from stagecraft.contract import ValuesContract
 from stagecraft.errors import CompileError
 from stagecraft.serialize import serialize
-from stagecraft.spec import Pipeline, Stage
+from stagecraft.spec import Action, Pipeline, Stage
 
 from fixtures.actions import Shell
-from fixtures.contract import CONTEXT
-
-SCHEMA = {
-    "type": "object",
-    "required": ["a", "obj", "nullable", "choice", "loose", "bad-key", "mixed"],
-    "properties": {
-        "a": {
-            "type": "object",
-            "required": ["s", "n", "ref"],
-            "properties": {
-                "s": {"type": "string"},
-                "n": {"type": "integer"},
-                "ref": {"$ref": "#/$defs/flag"},
-                "optional": {"type": "string"},
-            },
-        },
-        "obj": {"type": "object", "required": [], "properties": {}},
-        "nullable": {"type": ["string", "null"]},
-        "choice": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
-        "loose": {"type": "object", "additionalProperties": True, "properties": {}},
-        "bad-key": {"type": "string"},
-        "mixed": {"type": ["string", "integer"]},
-    },
-    "$defs": {"flag": {"type": "boolean"}},
-}
 
 
-def context(prefix: str = "") -> CompileContext:
-    return CompileContext(ValuesContract(SCHEMA, prefix=prefix))
+class Retries(Action):
+    """Uses strings.retries as an integer."""
+
+    script: str = "retry {}"
+
+    def compile(self, ctx: CompileContext) -> Container:
+        retries = ctx.value("strings.retries", int)
+        return Container(image="busybox", args=[self.script.format(retries)])
 
 
-def test_valid_reference_returns_a_marker_for_the_full_path():
-    assert context().value("a.s", str) == "<<values:a.s>>"
+def test_a_reference_returns_a_marker_and_is_recorded_with_its_type():
+    ctx = CompileContext()
+
+    assert ctx.value("a.s", str) == "<<values:a.s>>"
+    assert ctx.references == {"a.s": str}
 
 
 def test_non_string_scalars_are_marked_for_json_rendering():
     # Helm's `quote` prints large numbers in exponent notation ("1e+06"); `toJson` doesn't.
-    assert context().value("a.n", int) == "<<values:a.n|json>>"
+    ctx = CompileContext()
+
+    assert ctx.value("a.n", int) == "<<values:a.n|json>>"
+    assert ctx.value("a.f", bool) == "<<values:a.f|json>>"
 
 
-def test_local_refs_are_followed():
-    assert context().value("a.ref", bool) == "<<values:a.ref|json>>"
+def test_references_default_to_strings():
+    ctx = CompileContext()
+    ctx.value("a.s")
+
+    assert ctx.references == {"a.s": str}
 
 
-def test_prefix_is_prepended_to_lookups_and_expressions():
-    nested = {"type": "object", "required": ["ci"], "properties": {"ci": SCHEMA}}
-    ctx = CompileContext(ValuesContract(nested, prefix="ci"))
+def test_the_same_path_can_be_referenced_again_with_the_same_type():
+    ctx = CompileContext()
+    ctx.value("a.n", int)
+    ctx.value("a.n", int)
 
-    assert ctx.value("a.s", str) == "<<values:ci.a.s>>"
-
-
-@pytest.mark.parametrize("path", ["a.missing", "missing", "loose.anything"])
-def test_undeclared_paths_fail(path):
-    # Undeclared keys are nonexistent even where additionalProperties allows them.
-    with pytest.raises(CompileError, match="is not declared in the values schema"):
-        context().value(path, str)
+    assert ctx.references == {"a.n": int}
 
 
-def test_optional_paths_fail():
-    with pytest.raises(CompileError, match=r"'a\.optional' is optional .* only required values"):
-        context().value("a.optional", str)
+def test_one_path_cannot_have_two_types():
+    ctx = CompileContext()
+    ctx.value("a.n", int)
 
-
-def test_wrong_type_fails():
     with pytest.raises(
-        CompileError, match=r"'a\.n' is integer in the values schema, but is used as string"
+        CompileError, match=r"value 'a\.n' is used as str here but as int elsewhere"
     ):
-        context().value("a.n", str)
+        ctx.value("a.n", str)
 
 
-def test_objects_cannot_be_used_as_scalars():
-    with pytest.raises(CompileError, match=r"'obj' is object .* used as a scalar"):
-        context().value("obj")
+@pytest.mark.parametrize(("first", "second"), [("a", "a.b"), ("a.b", "a")])
+def test_a_path_cannot_be_both_a_value_and_an_object(first, second):
+    ctx = CompileContext()
+    ctx.value(first, str)
+
+    with pytest.raises(CompileError, match="both a value and an object"):
+        ctx.value(second, str)
 
 
-def test_scalars_mixing_string_with_other_types_fail():
-    with pytest.raises(CompileError, match="'mixed' mixes string with other types"):
-        context().value("mixed")
+@pytest.mark.parametrize("path", ["bad-key", "a..b", "a.1x", ""])
+def test_keys_must_be_identifiers(path):
+    with pytest.raises(CompileError, match="must be dotted identifiers"):
+        CompileContext().value(path, str)
 
 
-def test_nullable_values_fail():
-    with pytest.raises(CompileError, match="'nullable' is nullable"):
-        context().value("nullable", str)
-
-
-def test_unsupported_schema_constructs_fail():
-    with pytest.raises(CompileError, match="unsupported schema construct 'oneOf' at 'choice'"):
-        context().value("choice")
-
-
-def test_non_identifier_keys_fail():
-    with pytest.raises(CompileError, match="'bad-key' must be an identifier"):
-        context().value("bad-key", str)
+def test_the_stagecraft_key_is_reserved_for_framework_values():
+    with pytest.raises(CompileError, match="'stagecraft' is reserved"):
+        CompileContext().value("stagecraft.sources.image", str)
 
 
 def test_structured_expected_types_are_not_supported_yet():
     with pytest.raises(CompileError, match="only scalar values"):
-        context().value("obj", dict)
+        CompileContext().value("obj", dict)
 
 
-def test_pipeline_placeholder_failure_names_pipeline_stage_step_and_path():
+def test_placeholders_are_recorded_as_strings():
+    ctx = CompileContext()
     pipeline = Pipeline(
-        name="p", stages=[Stage("s", [Shell(script="echo {{ values.notify.nope }}")])]
+        name="p", stages=[Stage("s", [Shell(script="echo {{ values.notify.channel }}")])]
+    )
+
+    compile_pipeline(pipeline, ctx)
+
+    assert ctx.references == {"images.shell": str, "notify.channel": str}
+
+
+def test_conflicts_name_the_pipeline_stage_and_step():
+    pipeline = Pipeline(
+        name="p",
+        stages=[Stage("s", [Retries(), Shell(script="echo {{ values.strings.retries }}")])],
     )
 
     with pytest.raises(
         CompileError,
-        match=r"pipeline 'p', stage 's', step 'shell': value 'notify\.nope' is not declared",
+        match=r"pipeline 'p', stage 's', step 'shell': value 'strings\.retries' is used as str",
     ):
-        compile_pipeline(pipeline, CONTEXT)
-
-
-def test_action_reference_failure_names_the_step():
-    empty = CompileContext(ValuesContract({"type": "object", "properties": {}}))
-    pipeline = Pipeline(name="p", stages=[Stage("s", [Shell(script="true")])])
-
-    with pytest.raises(CompileError, match=r"step 'shell': value 'images\.shell' is not declared"):
-        compile_pipeline(pipeline, empty)
+        compile_pipeline(pipeline, CompileContext())
 
 
 def test_placeholder_in_a_string_renders_a_helm_splice():
@@ -135,7 +117,7 @@ def test_placeholder_in_a_string_renders_a_helm_splice():
         name="p", stages=[Stage("s", [Shell(script="notify {{ values.notify.channel }}")])]
     )
 
-    rendered = serialize(compile_pipeline(pipeline, CONTEXT))
+    rendered = serialize(compile_pipeline(pipeline, CompileContext()))
 
     assert (
         '- "notify {{ .Values.notify.channel | quote | trimPrefix "\\"" | trimSuffix "\\"" }}"'
@@ -144,21 +126,17 @@ def test_placeholder_in_a_string_renders_a_helm_splice():
 
 
 def test_number_inside_a_string_renders_as_json():
-    pipeline = Pipeline(
-        name="p", stages=[Stage("s", [Shell(script="retry {{ values.strings.retries }}")])]
-    )
+    pipeline = Pipeline(name="p", stages=[Stage("s", [Retries()])])
 
-    rendered = serialize(compile_pipeline(pipeline, CONTEXT))
+    rendered = serialize(compile_pipeline(pipeline, CompileContext()))
 
     assert '- "retry {{ .Values.strings.retries | toJson }}"' in rendered
 
 
 def test_whole_number_field_renders_as_a_quoted_json_number():
-    pipeline = Pipeline(
-        name="p", stages=[Stage("s", [Shell(script="{{ values.strings.retries }}")])]
-    )
+    pipeline = Pipeline(name="p", stages=[Stage("s", [Retries(script="{}")])])
 
-    rendered = serialize(compile_pipeline(pipeline, CONTEXT))
+    rendered = serialize(compile_pipeline(pipeline, CompileContext()))
 
     assert "- {{ .Values.strings.retries | toJson | quote }}" in rendered
 
@@ -166,6 +144,6 @@ def test_whole_number_field_renders_as_a_quoted_json_number():
 def test_whole_field_reference_renders_quoted_helm_value():
     pipeline = Pipeline(name="p", stages=[Stage("s", [Shell(script="true")])])
 
-    rendered = serialize(compile_pipeline(pipeline, CONTEXT))
+    rendered = serialize(compile_pipeline(pipeline, CompileContext()))
 
     assert "image: {{ .Values.images.shell | quote }}" in rendered

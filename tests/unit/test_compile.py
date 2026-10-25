@@ -1,16 +1,16 @@
 import pytest
 
 from stagecraft.compile import compile_pipeline
+from stagecraft.context import CompileContext
 from stagecraft.errors import CompileError
 from stagecraft.spec import Param, Pipeline, Stage, Step
 
 from fixtures.actions import Shell
-from fixtures.contract import CONTEXT
 from fixtures.pipelines import smoke
 
 
 def manifest(pipeline):
-    return compile_pipeline(pipeline, CONTEXT).to_dict()
+    return compile_pipeline(pipeline, CompileContext()).to_dict()
 
 
 def template(m, name):
@@ -69,7 +69,7 @@ def test_param_placeholders_in_actions_are_lowered():
 
 
 def test_compile_does_not_mutate_the_spec():
-    compile_pipeline(smoke.pipeline, CONTEXT)
+    compile_pipeline(smoke.pipeline, CompileContext())
 
     assert smoke.pipeline.stages[0].steps[0].action.script == "echo cloning {{ param.repo }}"
 
@@ -78,7 +78,7 @@ def test_undeclared_param_error_names_the_location():
     pipeline = Pipeline(name="p", stages=[Stage("s", [Shell(script="{{ param.nope }}")])])
 
     with pytest.raises(CompileError, match="pipeline 'p', stage 's', step 'shell': undeclared"):
-        compile_pipeline(pipeline, CONTEXT)
+        compile_pipeline(pipeline, CompileContext())
 
 
 @pytest.mark.parametrize(
@@ -92,4 +92,4 @@ def test_template_name_collisions_are_rejected(stages):
     pipeline = Pipeline(name="p", params=[Param("x", default="1")], stages=stages)
 
     with pytest.raises(CompileError, match=r"pipeline 'p': template name '(a-b|main)'"):
-        compile_pipeline(pipeline, CONTEXT)
+        compile_pipeline(pipeline, CompileContext())

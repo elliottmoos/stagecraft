@@ -51,7 +51,7 @@ Reading it from the left:
   posts how a failed run ended.
 
 Everything installation-specific (images, build resources, the channel, the token Secret's name)
-comes from the chart's values, checked against its schema at every render.
+comes from each installation's values, which Helm checks against the generated schema.
 
 Each step starts in its own empty container: Stagecraft doesn't share files between steps yet.
 Until it does, an action that needs the code fetches it itself. Framework-managed sources and files
@@ -163,7 +163,7 @@ by several pipelines.
 - **Pass fields as environment variables** rather than splicing them into scripts.
 - **Take every installation detail from `ctx`**: images, Secret names, sizes.
 - **Validate what you can** in field validators, remembering they see placeholders as text.
-- **Test each action** with a small contract listing exactly the values it needs.
+- **Test each action**, and assert `ctx.references`: it lists exactly the values it needs.
 
 ### Deciding where things go
 
@@ -187,24 +187,28 @@ by several pipelines.
 
 1. List the steps and what each depends on; group independent steps into stages.
 2. Decide the params (per run) and the Helm values (per installation) each step needs; add the
-   values to the chart's schema as **required**, with defaults in `values.yaml`.
+   values to every environment's values file.
 3. Reuse actions where they exist; write and test new ones where they don't.
 4. Add `status=` to the pipeline (and stages) that should be GitHub checks, plus a
    `status_reporter`; require the pipeline's context in branch protection.
 5. Add handlers for notifications and cleanup; triggers for schedules.
-6. `stagecraft check`, `stagecraft graph`, `stagecraft render`, then the chart's checks.
+6. `stagecraft check`, `stagecraft graph`, `stagecraft render`, then `helm template` with each
+   environment's values (chapter 9).
 
 ## Troubleshooting
 
-The render stops at the first problem and names where it is. Common messages:
+The render stops at the first problem and names where it is. Problems with an installation's
+values show up later, at `helm template` or install: a `missing property` means a values file
+lacks a value the pipelines use (or an action misspells a path); `got number, want string` means
+a value needs quotes. Common render messages:
 
 | Message (abridged) | Cause | Fix |
 |---|---|---|
 | `undeclared param 'sha'` | `{{ param.sha }}` with no `Param("sha")` | Declare the param |
 | `'{{ step.name }}' is only available in handlers` | `{{ step.* }}` outside a handler | Move it into an `on_*`/`finally_` handler |
-| `value 'build.memory' is not declared in the values schema` | The chart's schema lacks the path | Add it to the schema (required), or fix the path |
-| `value 'build.region' is optional in the values schema` | The path isn't required at every level | Mark it required and give it a default |
-| `value 'build.retries' is integer in the values schema, but is used as string` | Type mismatch | Change the schema type or the type passed to `ctx.value` |
+| `value 'build.retries' is used as str here but as int elsewhere` | Two references give one path different types | Use one type everywhere (placeholders are strings) |
+| `paths must be dotted identifiers` | A key like `alert-channel` | Rename the key (`alertChannel`) |
+| `'stagecraft' is reserved for framework values` | A value under `stagecraft.` | Use another top-level key |
 | `handler steps cannot set when, status, or handlers` | A handler with `when=`, `status=`, or handlers | Remove them; put conditions on the owning step |
 | `duplicate step name 'make'` | Two bare actions of one class in a stage | Wrap each in `Step("<name>", ...)` |
 | `must be a lowercase DNS label` | A stage or step name like `Verify` | Use `a-z`, `0-9`, `-` |

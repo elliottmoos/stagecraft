@@ -2,11 +2,11 @@ import pytest
 from pydantic import ValidationError
 
 from stagecraft.compile import compile_pipeline
+from stagecraft.context import CompileContext
 from stagecraft.errors import CompileError
 from stagecraft.spec import Pipeline, Stage, Step
 
 from fixtures.actions import Shell
-from fixtures.contract import CONTEXT
 from fixtures.pipelines import hooks as hooks_fixture
 
 SUCCEEDED = "{{inputs.parameters.status}} == Succeeded"
@@ -14,7 +14,7 @@ FAILED = "{{inputs.parameters.status}} == Failed || {{inputs.parameters.status}}
 
 
 def manifest(pipeline):
-    return compile_pipeline(pipeline, CONTEXT).to_dict()
+    return compile_pipeline(pipeline, CompileContext()).to_dict()
 
 
 def template(m, name):
@@ -132,7 +132,7 @@ def test_handler_errors_name_the_full_location():
         CompileError,
         match="pipeline 'p', stage 's', step 'shell', on_failure step 'shell': undeclared",
     ):
-        compile_pipeline(pipeline, CONTEXT)
+        compile_pipeline(pipeline, CompileContext())
 
 
 @pytest.mark.parametrize(

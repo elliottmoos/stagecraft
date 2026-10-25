@@ -23,8 +23,8 @@ spec:
         template: only-values
       - name: whole
         template: only-whole
-      - name: whole-number
-        template: only-whole-number
+      - name: typed
+        template: only-typed
     name: only
   - container:
       args:
@@ -44,7 +44,7 @@ spec:
     name: only-exprs
   - container:
       args:
-      - "echo 'tricky: {{ .Values.strings.tricky | quote | trimPrefix "\"" | trimSuffix "\"" }}'\necho \"retries={{ .Values.strings.retries | toJson }} debug={{ .Values.strings.debug | toJson }} {{`{{workflow.name}}`}}\"\necho \"big={{ .Values.strings.big | toJson }}\"\n"
+      - "echo 'tricky: {{ .Values.strings.tricky | quote | trimPrefix "\"" | trimSuffix "\"" }}'\necho \"tricky again: {{ .Values.strings.tricky | quote | trimPrefix "\"" | trimSuffix "\"" }} {{`{{workflow.name}}`}}\"\n"
       command:
       - sh
       - -c
@@ -60,9 +60,12 @@ spec:
     name: only-whole
   - container:
       args:
-      - {{ .Values.strings.big | toJson | quote }}
+      - "echo \"retries={{ .Values.strings.retries | toJson }} debug={{ .Values.strings.debug | toJson }} big={{ .Values.strings.big | toJson }} {{`{{workflow.name}}`}}\""
       command:
       - sh
       - -c
+      env:
+      - name: BIG
+        value: {{ .Values.strings.big | toJson | quote }}
       image: {{ .Values.images.shell | quote }}
-    name: only-whole-number
+    name: only-typed

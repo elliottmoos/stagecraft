@@ -1,5 +1,7 @@
 """Command-line entry point. The CLI is the only layer that reads files and prints."""
 
+import re
+import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
 from importlib.metadata import version
@@ -7,26 +9,20 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+import yaml
 
 from stagecraft import __version__
-from stagecraft.compile import compile_pipeline, compile_triggers
-from stagecraft.context import CompileContext
-from stagecraft.contract import ValuesContract
+from stagecraft.chart import CHART_FILE, MARKER, TEMPLATES, render_chart
 from stagecraft.errors import StagecraftError
 from stagecraft.graph import mermaid
 from stagecraft.loader import load_pipelines
-from stagecraft.serialize import serialize
 from stagecraft.spec import Pipeline
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 Paths = Annotated[list[Path], typer.Argument(help="Pipeline files or directories of them.")]
-ValuesSchema = Annotated[
-    Path, typer.Option(help="The chart's values.schema.json (the values contract).")
-]
-ValuesPrefix = Annotated[
-    str, typer.Option(help="Dotted key the chart nests stagecraft values under, if any.")
-]
+# Helm chart names: lowercase letters, digits, and dashes.
+_CHART_NAME = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?")
 
 
 @app.callback()
@@ -43,31 +39,37 @@ def show_version() -> None:
 @app.command()
 def render(
     paths: Paths,
-    out: Annotated[Path, typer.Option(help="Directory to write templates into.")],
-    values_schema: ValuesSchema,
-    values_prefix: ValuesPrefix = "",
+    out: Annotated[Path, typer.Option(help="The chart directory to write.")],
+    chart_name: Annotated[str, typer.Option(help="The chart's name.")] = "pipelines",
 ) -> None:
-    """Compile pipelines and write one template file per pipeline.
+    """Compile pipelines into a Helm chart: Chart.yaml, values.schema.json, and templates/.
 
-    A pipeline's file holds its WorkflowTemplate and a CronWorkflow per trigger. Every Helm value
-    reference is checked against the values schema. Nothing is written unless
-    every pipeline compiles.
+    Each pipeline's template file holds its WorkflowTemplate and a CronWorkflow per trigger. The
+    values schema requires every Helm value the pipelines reference. Re-rendering replaces those
+    three entries and nothing else. Nothing is written unless every pipeline compiles.
     """
     with _errors():
-        rendered = _render(paths, values_schema, values_prefix)
+        if not _CHART_NAME.fullmatch(chart_name):
+            raise StagecraftError(
+                f"chart name {chart_name!r} must be lowercase letters, digits, and dashes"
+            )
+        files = render_chart(load_pipelines(paths), chart_name)
+        _check_owned(out)
 
-    out.mkdir(parents=True, exist_ok=True)
-    for name, text in rendered.items():
-        (out / f"{name}.yaml").write_text(text)
-        typer.echo(f"wrote {out / f'{name}.yaml'}")
+    shutil.rmtree(out / TEMPLATES, ignore_errors=True)
+    for path, text in files.items():
+        (out / path).parent.mkdir(parents=True, exist_ok=True)
+        (out / path).write_text(text)
+        typer.echo(f"wrote {out / path}")
 
 
 @app.command()
-def check(paths: Paths, values_schema: ValuesSchema, values_prefix: ValuesPrefix = "") -> None:
-    """Compile and validate pipelines as render does, without writing anything."""
+def check(paths: Paths) -> None:
+    """Compile pipelines as render does, without writing anything."""
     with _errors():
-        rendered = _render(paths, values_schema, values_prefix)
-    typer.echo(f"ok: {', '.join(rendered)}")
+        pipelines = load_pipelines(paths)
+        render_chart(pipelines)
+    typer.echo(f"ok: {', '.join(p.name for p in pipelines)}")
 
 
 @app.command()
@@ -105,14 +107,23 @@ def _errors() -> Iterator[None]:
         raise typer.Exit(1) from e
 
 
-def _render(paths: list[Path], values_schema: Path, values_prefix: str) -> dict[str, str]:
-    """Each pipeline's rendered file (its WorkflowTemplate, then a CronWorkflow per trigger), by
-    pipeline name."""
-    ctx = CompileContext(ValuesContract.load(values_schema, values_prefix))
-    return {
-        p.name: serialize(compile_pipeline(p, ctx), *compile_triggers(p, ctx))
-        for p in load_pipelines(paths)
-    }
+def _check_owned(out: Path) -> None:
+    """Write only into a missing or empty directory, or a chart stagecraft generated, so a
+    mistyped --out never overwrites someone else's files."""
+    if not out.exists() or (out.is_dir() and not any(out.iterdir())):
+        return
+    chart = out / CHART_FILE
+    try:
+        annotations = (yaml.safe_load(chart.read_text()) or {}).get("annotations") or {}
+    except FileNotFoundError:
+        annotations = {}
+    except (OSError, yaml.YAMLError, AttributeError) as e:
+        raise StagecraftError(f"{chart}: cannot read: {e}") from e
+    if annotations.get(MARKER) != "true":
+        raise StagecraftError(
+            f"{out} was not generated by stagecraft (no {CHART_FILE} with the {MARKER!r} "
+            "annotation); render into a new or empty directory, or one stagecraft created"
+        )
 
 
 def _pick(pipelines: list[Pipeline], name: str | None) -> Pipeline:

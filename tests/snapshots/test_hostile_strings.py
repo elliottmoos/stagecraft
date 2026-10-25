@@ -3,10 +3,10 @@ script, a param default, and a param description; `helm template` must reproduce
 manifest exactly (DESIGN.md section 8)."""
 
 from stagecraft.compile import compile_pipeline
+from stagecraft.context import CompileContext
 from stagecraft.spec import Param, Pipeline, Stage, Step
 
 from fixtures.actions import Shell
-from fixtures.contract import CONTEXT
 from support import build_chart, helm_template, with_fixture_values
 
 HOSTILE = [
@@ -42,7 +42,7 @@ HOSTILE = [
     "héllo ✓ 你好 🚀",
     # Values next to Argo expressions
     "{{ values.notify.channel }}{{workflow.name}}",
-    "multi\n{{ values.strings.tricky }}\n{{ values.strings.big }}",
+    "multi\n{{ values.strings.tricky }}\n{{ values.notify.channel }}",
 ]
 
 
@@ -68,4 +68,4 @@ def test_helm_reproduces_hostile_strings_exactly(tmp_path):
 
     docs = helm_template(build_chart(tmp_path, [hostile]), tmp_path / "rendered.yaml")
 
-    assert docs == [with_fixture_values(compile_pipeline(hostile, CONTEXT).to_dict())]
+    assert docs == [with_fixture_values(compile_pipeline(hostile, CompileContext()).to_dict())]

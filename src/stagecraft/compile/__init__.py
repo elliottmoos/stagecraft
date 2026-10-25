@@ -57,7 +57,7 @@ def compile_pipeline(pipeline: Pipeline, ctx: CompileContext) -> WorkflowTemplat
     entrypoint DAG. Stage N depends on stage N-1, one edge per stage. Stage and step handlers run
     from task `exit` hooks, pipeline handlers from the workflow's `onExit`. Commit statuses are
     report tasks around each step and in those exit handlers. Helm values come from `ctx`, which
-    validates every reference against the chart's values contract.
+    records every reference for the generated values schema.
     """
     lowering = _Lowering({p.name for p in pipeline.params}, ctx)
     templates = []

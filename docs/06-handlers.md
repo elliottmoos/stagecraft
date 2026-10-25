@@ -152,9 +152,9 @@ pipeline = Pipeline(
 )
 ```
 
-The chart provides the channel:
+Each installation sets the channel:
 
-```yaml file=chart/values.yaml
+```yaml file=values/staging.yaml
 images:
   shell: alpine:3.22
   build: golang:1.25
@@ -163,42 +163,6 @@ build:
   memory: 2Gi
 notify:
   channel: "#ci"
-```
-
-```json file=chart/values.schema.json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["images", "build", "notify"],
-  "properties": {
-    "images": {
-      "type": "object",
-      "required": ["shell", "build"],
-      "properties": {
-        "shell": {"$ref": "#/$defs/image"},
-        "build": {"$ref": "#/$defs/image"}
-      }
-    },
-    "build": {
-      "type": "object",
-      "required": ["cpu", "memory"],
-      "properties": {
-        "cpu": {"type": "string", "description": "CPU request for build steps"},
-        "memory": {"type": "string", "description": "Memory request for build steps"}
-      }
-    },
-    "notify": {
-      "type": "object",
-      "required": ["channel"],
-      "properties": {
-        "channel": {"type": "string", "description": "Chat channel for build notifications"}
-      }
-    }
-  },
-  "$defs": {
-    "image": {"type": "string", "description": "A container image reference"}
-  }
-}
 ```
 
 ## When handlers run, and when they don't

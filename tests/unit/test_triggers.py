@@ -4,12 +4,12 @@ import pytest
 from pydantic import ValidationError
 
 from stagecraft.compile import compile_pipeline, compile_triggers
+from stagecraft.context import CompileContext
 from stagecraft.errors import CompileError
 from stagecraft.serialize import serialize
 from stagecraft.spec import Param, Pipeline, Stage, Trigger
 
 from fixtures.actions import Shell
-from fixtures.contract import CONTEXT
 from fixtures.pipelines import smoke, triggers
 
 MODE = Param("mode", default="a", enum=["a", "b"])
@@ -25,7 +25,7 @@ def pipeline_with(*trigger_list, params=(MODE,)):
 
 
 def crons(pipeline):
-    return [c.to_dict() for c in compile_triggers(pipeline, CONTEXT)]
+    return [c.to_dict() for c in compile_triggers(pipeline, CompileContext())]
 
 
 def test_no_triggers_means_no_cron_workflows():
@@ -65,9 +65,9 @@ def test_timezone_and_value_params_are_passed_through():
 
 
 def test_cron_workflows_follow_the_template_in_one_file():
-    template = compile_pipeline(triggers.pipeline, CONTEXT)
+    template = compile_pipeline(triggers.pipeline, CompileContext())
 
-    rendered = serialize(template, *compile_triggers(triggers.pipeline, CONTEXT))
+    rendered = serialize(template, *compile_triggers(triggers.pipeline, CompileContext()))
 
     assert rendered.count("\n---\n") == 2
     assert rendered.index("kind: WorkflowTemplate") < rendered.index("kind: CronWorkflow")
@@ -112,11 +112,20 @@ def test_trigger_param_values_cannot_use_other_placeholders():
     pipeline = pipeline_with(Trigger.cron("@daily", params={"mode": "{{ param.mode }}"}))
 
     with pytest.raises(CompileError, match="pipeline 'p', trigger 'cron', param 'mode'"):
-        compile_triggers(pipeline, CONTEXT)
+        compile_triggers(pipeline, CompileContext())
 
 
-def test_trigger_value_params_are_checked_against_the_contract():
-    pipeline = pipeline_with(Trigger.cron("@daily", params={"mode": "{{ values.nope }}"}))
+def test_trigger_value_params_are_recorded_as_string_references():
+    pipeline = pipeline_with(Trigger.cron("@daily", params={"mode": "{{ values.schedule.mode }}"}))
+    ctx = CompileContext()
 
-    with pytest.raises(CompileError, match="value 'nope' is not declared"):
-        compile_triggers(pipeline, CONTEXT)
+    compile_triggers(pipeline, ctx)
+
+    assert ctx.references == {"schedule.mode": str}
+
+
+def test_trigger_value_params_must_be_valid_references():
+    pipeline = pipeline_with(Trigger.cron("@daily", params={"mode": "{{ values.stagecraft.x }}"}))
+
+    with pytest.raises(CompileError, match=r"trigger 'cron', param 'mode': .* is reserved"):
+        compile_triggers(pipeline, CompileContext())

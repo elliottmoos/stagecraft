@@ -8,15 +8,14 @@ from pathlib import Path
 import pytest
 import yaml
 
+from stagecraft.chart import render_chart
 from stagecraft.compile import compile_pipeline, compile_triggers
-from stagecraft.context import VALUE_MARKER
-from stagecraft.serialize import serialize
+from stagecraft.context import VALUE_MARKER, CompileContext
 from stagecraft.spec import Pipeline
 
-from fixtures.contract import CONTEXT
-
 FIXTURES = Path(__file__).parent / "fixtures"
-FIXTURE_CHART = FIXTURES / "chart"
+# Values for every test installation: a superset of what the fixture pipelines reference.
+FIXTURE_VALUES = FIXTURES / "values.yaml"
 CRD_SCHEMAS = FIXTURES / "crd-schemas"
 
 
@@ -38,31 +37,36 @@ def run(*args: str, timeout: float = 120, check: bool = True) -> str:
 
 
 def build_chart(tmp_path: Path, pipelines: list[Pipeline]) -> Path:
-    """Copy the fixture chart and write the rendered pipelines into its templates/."""
+    """Write the chart stagecraft generates for `pipelines` under `tmp_path`."""
     chart = tmp_path / "chart"
     shutil.rmtree(chart, ignore_errors=True)  # a test may install several times
-    shutil.copytree(FIXTURE_CHART, chart)
-    for pipeline in pipelines:
-        (chart / "templates" / f"{pipeline.name}.yaml").write_text(serialize(*manifests(pipeline)))
+    for path, text in render_chart(pipelines, name="stagecraft-fixture").items():
+        (chart / path).parent.mkdir(parents=True, exist_ok=True)
+        (chart / path).write_text(text)
     return chart
 
 
 def manifests(pipeline: Pipeline) -> list:
     """The pipeline's compiled WorkflowTemplate, then its CronWorkflows."""
-    return [compile_pipeline(pipeline, CONTEXT), *compile_triggers(pipeline, CONTEXT)]
+    return [
+        compile_pipeline(pipeline, CompileContext()),
+        *compile_triggers(pipeline, CompileContext()),
+    ]
 
 
 def helm_template(chart: Path, out: Path) -> list[dict]:
     """Run `helm template`, write the result to `out`, and return the parsed documents."""
-    rendered = run(require_tool("helm"), "template", "fixture", str(chart))
+    rendered = run(
+        require_tool("helm"), "template", "fixture", str(chart), "-f", str(FIXTURE_VALUES)
+    )
     out.write_text(rendered)
     return [doc for doc in yaml.safe_load_all(rendered) if doc]
 
 
 def with_fixture_values(node):
-    """`node` with value markers replaced by the fixture chart's values, as Helm renders them
-    (`quote` stringifies: booleans as true/false)."""
-    values = yaml.safe_load((FIXTURE_CHART / "values.yaml").read_text())
+    """`node` with value markers replaced by the fixture values, as Helm renders them (`quote`
+    stringifies: booleans as true/false)."""
+    values = yaml.safe_load(FIXTURE_VALUES.read_text())
 
     def lookup(match) -> str:
         value = values

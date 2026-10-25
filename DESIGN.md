@@ -16,44 +16,42 @@ Goals:
 - CI/CD primitives are declared on stages and steps, and the compiler lowers them to Argo mechanics.
 - Actions are testable in isolation through a typed contract.
 - All installation-specific configuration is either a Helm value or bound at runtime. Pipeline and action code never contains literals that vary per installation.
-- The Helm chart owns the values contract. Stagecraft complies with it and refuses to render anything that violates it. (From slice 13, Stagecraft generates the pipelines chart and its contract instead; section 16.)
+- Stagecraft generates the pipelines chart and its values contract from what the pipelines use; Helm enforces the contract on each installation's values (section 16).
 - Output is plain manifests (Helm-compatible templates), committed and reviewable.
 
 Non-goals:
 - Hera is a compiler here, not a runtime. Pipelines are never executed from Python.
-- Stagecraft does not generate or own the Helm chart (no `Chart.yaml`, `values.yaml`, `values.schema.json`, helpers, or packaging) and does not define the values contract. Reversed from slice 13 (decided 2026-10-25): Stagecraft generates a self-contained pipelines chart (`Chart.yaml`, `values.schema.json`, `templates/`) and nothing else. It still never writes `values.yaml` and never generates the resources pipelines depend on (service accounts, RBAC, Secrets); section 16.
+- Stagecraft generates only the self-contained pipelines chart (`Chart.yaml`, `values.schema.json`, `templates/`; decided 2026-10-25, built in slice 13). It never writes `values.yaml`, helpers, or packaging, and never generates the resources pipelines depend on (service accounts, RBAC, Secrets); section 16.
 - Stagecraft does not define a catalog of concrete CI actions (clone, build, deploy, and so on). Action authors, or a separate library, own those. The framework only defines the action base type and the Argo features it maps to.
 - No replacement for Argo Events or Argo CD, and no custom UI.
 - Not every Argo feature is modeled. Actions build Hera templates directly; a raw-Hera escape hatch beyond one `Container` or `Script` is deferred (section 15).
 
 ## 3. Repository boundaries
 
-From slice 13 this changes (section 16): the pipelines project renders its own self-contained chart, installed as its own Helm release next to whatever chart provides the service accounts and Secrets. Until then:
-
-Three roles, which can be two or three repos:
+Two roles:
 
 - **stagecraft** (the library repo): framework, CLI, and tests. It knows nothing about any specific chart or installation.
-- **Chart repo**: owns the Helm chart, `values.yaml`, and `values.schema.json` (the values contract). Rendered templates land in `templates/`.
-- **Pipelines**: pipeline definition files and any custom action code. These can live in the chart repo or in their own repo.
+- **Pipelines project**: pipeline definition files, any custom action code, and the values for each installation. It renders its own self-contained chart, installed as its own Helm release next to whatever provides the service accounts, Secrets, and artifact repository the pipelines refer to by name.
 
 Pipelines repo shape: a Python project that depends on a pinned stagecraft release (and on any action libraries). It does not need to be a distributable package. A `pyproject.toml` with dependencies only, plus the pipeline files, is enough. Stagecraft's CLI imports each pipeline module and renders it. If pipelines use only actions shipped by installable libraries, the CLI could alternatively run from a container image with the pipeline directory mounted. As soon as the repo contains custom actions, it is a normal Python project.
 
-The seam between repos:
-- Stagecraft reads the chart's `values.schema.json` and the pipeline files, and writes only into its `--out` directory.
-- The chart's CI runs `helm template`, `argo lint`, and kubeconform on the result.
+The seam:
+- Stagecraft reads the pipeline files and writes only the chart in its `--out` directory: `Chart.yaml`, `values.schema.json`, and `templates/`.
+- The project's CI runs `helm template` with each installation's values (which validates them against the generated schema), `argo lint`, and kubeconform on the result.
 
 ## 4. Architecture
 
-Four layers:
+Five layers:
 
 1. **Spec layer**: Pydantic models for `Pipeline`, `Stage`, `Step`, `Param`, `Trigger`, and the `Action` base type.
 2. **Action base type**: the contract every action follows (sections 6 and 16).
 3. **Compiler**: pure functions from a spec plus a `CompileContext` to Hera objects. No cluster access, no I/O, no globals.
 4. **Serializer**: turns Hera objects into Helm-compatible YAML. It owns Argo-expression escaping and Helm expression emission.
+5. **Chart**: packages the serialized templates with `Chart.yaml` and the values schema generated from the recorded value references.
 
 CLI:
-- `stagecraft render <pipelines> --values-schema <path> --out <dir>`: compile, validate against the contract, write templates.
-- `stagecraft check <pipelines> --values-schema <path>`: the same compilation and contract validation as `render`, without writing files.
+- `stagecraft render <pipelines> --out <dir> [--chart-name <name>]`: compile and write the chart (section 16).
+- `stagecraft check <pipelines>`: the same compilation as `render`, without writing files.
 - `stagecraft graph <pipelines> [--pipeline <name>]`: Mermaid diagram of a pipeline as authored (stages, steps, `when`, statuses, handlers, triggers), not of the compiled Argo templates. Labels are escaped with Mermaid entity codes; node ids are generated, so names like `end` are safe.
 - `stagecraft contexts <pipelines>`: list commit-status contexts as `<pipeline><TAB><context>` lines, in pipeline order (for branch protection setup).
 
@@ -109,7 +107,7 @@ An action is a unit with a typed contract, placed by a step. The framework's job
 | Action or step feature | Argo mechanism |
 |---|---|
 | Artifact inputs and outputs (slice 15, section 16) | Template `inputs` / `outputs` artifacts, routed between stages through stage DAG outputs and arguments |
-| Value references (`ctx.value(path, type)`, `{{ values.a.b }}`) | Helm expressions, validated against the chart's values contract |
+| Value references (`ctx.value(path, type)`, `{{ values.a.b }}`) | Helm expressions, each a required, typed property of the generated values schema |
 | Secret references | `secretKeyRef` env or volume; secret names come from Helm values, never secret contents |
 | Resources, retry, timeout, service account, node selection | Template fields, whose values come from Helm values |
 | `when` (stage or step) | `when` on the task |
@@ -151,39 +149,39 @@ Accepted gap (decided 2026-10-24; Kubernetes resources are eventually consistent
 1. **A Helm value**, referenced by path. Used for structural values (node selectors, tolerations, resource defaults, service account) and for names of runtime objects.
 2. **Runtime late binding**: ConfigMap or Secret key refs, `artifactRepositoryRef`, and `workflowDefaults`, resolved by the cluster when the workflow runs. The ConfigMap or Secret *name* is typically a Helm value.
 
-**The chart owns the contract.** The values contract is the chart's `values.schema.json` (Helm's native JSON Schema mechanism). Stagecraft is a consumer of that contract. From slice 13, Stagecraft generates the contract from the value references instead, and Helm enforces it when values are supplied (section 16); the resolver rules below then no longer apply, and the values prefix option is removed.
+**The generated contract** (slice 13; section 16, "The generated chart"). Every value reference, from a `{{ values.a.b }}` placeholder or `ctx.value(path, type)` in an action's `compile`, is recorded with its type, and the generated chart's `values.schema.json` requires each one. Values are supplied per installation at deploy time, and Helm validates them against the schema at `helm template` and install. Until slice 13 the chart owned a hand-written schema that Stagecraft resolved references against; that resolver is gone.
 
-**Validation at render time.** Every value reference, whether it comes from a `{{ values.a.b }}` placeholder in a pipeline file or from `ctx.value(...)` in an action's `compile`, is checked against the schema. Rendering fails, with the offending pipeline, stage, step, and path in the error, when:
-- the path does not exist in the schema (undeclared keys are treated as nonexistent; the contract should be strict about `additionalProperties`),
-- the schema type is incompatible with how the value is used (for example an integer used as a string),
-- the value is optional or nullable at any level of the schema.
+**Validation at render time.** Rendering fails, with the offending pipeline, stage, step, and path in the error, when a reference:
+- is not a dotted path of identifiers (keys must work as `.Values.a.b`),
+- is under the reserved `stagecraft` key (framework values, section 16),
+- uses a path already used with another type, or as both a value and an object (`a` and `a.b`),
+- expects something other than a scalar (`str`, `int`, `float`, `bool`).
 
-Nothing is rendered for a pipeline that fails validation.
+`{{ values.a.b }}` placeholders are always strings. Nothing is rendered unless every pipeline compiles.
 
-Decided: references must be **required** at every level of the schema and non-null; there are no guards or action-declared defaults. The chart owns the contract, so a value pipelines use is marked required, with its default in `values.yaml`. The resolver follows `properties`, `required`, `type`, and local `$ref`s; a path through `oneOf`, `anyOf`, `allOf`, `not`, `if`, `patternProperties`, or `dependentSchemas` fails rather than being guessed at. Keys must be identifiers so they work as `.Values.a.b`. Only scalar values (string, number, boolean) are supported, each with a single type (a string-or-number value is rejected, since it would need two renderings). Structured values (objects, arrays) are deferred until an action needs one (decided 2026-10-24): Hera validates object and list fields, so a reference could only get there through placeholder workarounds and patching the output. Scalar references inside an action-built object already work, for example `node_selector={"pool": ctx.value("build.pool", str)}`.
+Decided: every referenced value is **required** and non-null, with a single scalar type; there are no guards, defaults, or optional values. Structured values (objects, arrays) are deferred until an action needs one (decided 2026-10-24): Hera validates object and list fields, so a reference could only get there through placeholder workarounds and patching the output. Scalar references inside an action-built object already work, for example `node_selector={"pool": ctx.value("build.pool", str)}`.
 
-**`CompileContext`.** The compiler passes one explicit object into every action's `compile` call. It carries the parsed values contract and mints validated value references. It exists to:
+**`CompileContext`.** The compiler passes one explicit object into every action's `compile` call. It mints value references and records each with its type (`ctx.references`). It exists to:
 1. Keep the compile layer pure (no env reads or globals).
 2. Let actions request a value by path and expected type, receiving a typed handle that serializes to the right Helm expression, so actions never emit Helm syntax.
-3. Fail contract violations at compile time, so action tests supply only a small fake schema with exactly the values the action requests.
+3. Collect the references the values schema is generated from, so action tests can assert exactly which values an action uses.
 
 **Helm-compatible output.**
 - Output is template files only: `WorkflowTemplate` and `CronWorkflow` manifests with Helm expressions where values are Helm-bound.
 - Argo's `{{ }}` collides with Helm's. The serializer escapes every Argo expression in one pass and emits real Helm expressions only for value references, which it splices in after escaping. Every value lands in the manifest as a string. A field that is exactly one string value renders as `{{ .Values.a.b | quote }}`; a string inside other text forces a double-quoted YAML scalar and is spliced in as `quote` with its surrounding quotes trimmed, so values containing YAML syntax cannot change the document. Numbers and booleans render through `toJson` (`{{ .Values.a.b | toJson | quote }}` as a whole field, bare `toJson` inside text), because `quote` prints large numbers in exponent notation (`1000000` as `"1e+06"`, seen with Helm 4.1). A multi-line string containing a value is therefore a double-quoted one-liner rather than a literal block: less readable in diffs, but safe for any value (decided 2026-10-24). Helm `if` blocks for optional values are not needed while references are required-only.
 - The serializer fails rather than emit something Helm would misread: an unbalanced `{{` or `}}` in author text, a value reference in a mapping key, or author text containing its internal placeholder tokens. A round-trip test runs hostile strings (Argo expressions with backticks, author-typed Helm and Go template text, YAML syntax and implicit types, multi-line and non-ASCII text) through `helm template` and requires the exact compiled manifest back.
-- The chart's values prefix, if the chart nests stagecraft-related values under a key, is a render option (removed in slice 13).
 
 ## 9. Testing strategy
 
-1. **Unit**: plain Python functions, escaping, and contract-validation logic.
-2. **Action contract**: a compiled action exposes exactly its declared inputs, outputs, and artifacts, and references only the value paths and types it declares. (Inputs and outputs come with artifacts, slice 15. Actions request values inside `compile` rather than declaring them up front, and every request is checked against the contract.)
-3. **Contract validation**: with a fixture schema, assert that a missing path, a wrong type, and an optional value each fail rendering with a clear error, and that a valid reference renders.
+1. **Unit**: plain Python functions, escaping, chart and schema generation.
+2. **Action contract**: a compiled action exposes exactly its declared inputs, outputs, and artifacts, and references only the value paths and types it declares. (Inputs and outputs come with artifacts, slice 15. Actions request values inside `compile` rather than declaring them up front; tests assert `ctx.references`.)
+3. **Value references**: assert that conflicting types, invalid paths, and the reserved key each fail rendering with a clear error, that references are recorded with their types, and how each renders.
 4. **Composition**: each step's required inputs are produced by an earlier stage, and status contexts are unique. (Status contexts are checked; inputs come with section 16.)
 5. **Compile and snapshot**: assert structure (dependencies, hooks, `onExit`, resources) and snapshot the rendered templates so every change appears in review.
-6. **Static validation** (from slice 13, on the generated chart with a test values file, and the fixture chart is removed): run `helm template` against a **test-only fixture chart** (with fixture values and schema) inside the stagecraft repo, then `argo lint` and kubeconform on the result. Include escaping tests for Argo expressions in scripts, `when`, and `depends`. The fixture chart is never published.
-7. **Behavior** (kind or k3d with Argo installed, small and slow): a `run_step` fixture wraps a step in a one-step workflow, installs the fixture chart, submits it, and asserts on phase and outputs. Separate tests deliberately fail and pass steps to prove hooks, `onExit`, and status sequences fire correctly, including skipped and cancelled cases.
+6. **Static validation**: render the generated chart for the fixture pipelines and run `helm template` with a test-only values file (`tests/fixtures/values.yaml`, never published), then `argo lint` and kubeconform on the result. Include escaping tests for Argo expressions in scripts, `when`, and `depends`.
+7. **Behavior** (kind or k3d with Argo installed, small and slow): a `run_step` fixture wraps a step in a one-step workflow, installs it as a generated chart with the test values, submits it, and asserts on phase and outputs. Separate tests deliberately fail and pass steps to prove hooks, `onExit`, and status sequences fire correctly, including skipped and cancelled cases.
 
-The consumer repo has its own CI: `stagecraft check` and `render` against the real schema, then `helm template` per environment's values, `argo lint`, and kubeconform.
+The pipelines project has its own CI: `stagecraft render` (and a check that the committed chart is up to date), then `helm template` per environment's values, `argo lint`, and kubeconform.
 
 ## 10. Repo layout (stagecraft)
 
@@ -195,14 +193,14 @@ stagecraft/
   src/stagecraft/
     spec.py          # Pipeline, Stage, Step, Param, Trigger, Action base
     context.py       # CompileContext, value references
-    contract.py      # values.schema.json loading and validation
+    chart.py         # the generated chart: Chart.yaml, values schema, templates
     loader.py        # imports pipeline files, collects Pipeline objects
     compile/         # stages->DAG, hooks, onExit, triggers, placeholder lowering
     serialize/       # Helm-compatible serializer, escaping
     graph.py
     cli.py
   tests/{unit,contract,snapshots,integration}/
-  tests/fixtures/    # minimal actions, fixture schema, test-only fixture chart
+  tests/fixtures/    # minimal actions, fixture pipelines, test-only values, CRD schemas
 ```
 
 ## 11. Build plan (thin vertical slices)
@@ -242,7 +240,6 @@ Section 15 lists what was deliberately left out. Do not generalize before two or
 - Template-level versus task-level hook firing.
 - Argo CD sync order for CRDs versus chart contents, if Argo CD deploys the chart.
 - For section 16, on kind with its MinIO: a git input artifact checking out a commit that isn't a branch tip, at shallow depth; a global output parameter read by `onExit` and by exit hooks; artifacts routed through stage DAG outputs and inputs; an input artifact placed inside another (an artifact under the source checkout); whether a failed step's outputs are uploaded; `artifactGC` deleting objects when a workflow is deleted.
-- What `values.schema.json` can and cannot express (for example `$ref`, `oneOf`, defaults) and how much of it the validator must support. Moot from slice 13, when Stagecraft generates the schema.
 
 ## 14. Open decisions
 
@@ -250,7 +247,6 @@ Section 15 lists what was deliberately left out. Do not generalize before two or
 - Template naming across multiple releases in one namespace versus stable names in the Argo UI.
 - Whether a reference action library belongs in a third package.
 - Workflow TTL and the artifact GC service account (section 16): from the controller's `workflowDefaults`, or emitted per pipeline.
-- The generated chart's name and version (section 16). Default: a `--chart-name` flag and a fixed version `0.0.0`, since the chart is committed rather than published.
 - Whether to offer a resolved preview mode (render with a values file) for local debugging, or rely on `helm template`.
 
 ## 15. Deferred features
@@ -276,7 +272,7 @@ Accepted gaps (Argo or Helm behavior, not missing features) are kept with the me
 
 ## 16. Concept model and contracts
 
-Agreed 2026-10-25. This is the model slices 11 to 17 build toward (section 11); slices 11 and 12 are built. Where it conflicts with sections 5 to 8, those sections describe the current code and this section wins for new work. Points marked **open** are settled in the slice that builds them.
+Agreed 2026-10-25. This is the model slices 11 to 17 build toward (section 11); slices 11 to 13 are built. Where it conflicts with sections 5 to 8, those sections describe the current code and this section wins for new work. Points marked **open** are settled in the slice that builds them.
 
 ### Personas
 
@@ -372,7 +368,7 @@ Kept on purpose, with their use cases unknown yet:
 
 ### The generated chart
 
-Decided 2026-10-25. A pipelines project renders into one self-contained Helm chart, installed as its own release:
+Decided 2026-10-25, built in slice 13. A pipelines project renders into one self-contained Helm chart, installed as its own release:
 
 ```
 <out>/
@@ -381,10 +377,10 @@ Decided 2026-10-25. A pipelines project renders into one self-contained Helm cha
   templates/           one file per pipeline (WorkflowTemplate, then its CronWorkflows)
 ```
 
-- **Ownership.** Stagecraft owns exactly these three entries and replaces them on every render. It never creates or touches `values.yaml` or any other file in the directory, and refuses to render into a directory whose `Chart.yaml` lacks its marker.
+- **Ownership.** Stagecraft owns exactly these three entries and replaces them on every render. It never creates or touches `values.yaml` or any other file in the directory, and writes only into a missing or empty directory or one it generated (a `Chart.yaml` with its marker), so a mistyped `--out` can't overwrite anything else.
 - **Values come at deploy time**, from a file such as `values-pipelines.yaml` passed to the release. The chart has no defaults: every referenced value is required, and Helm rejects a missing or wrongly typed value at `helm template` or install, naming the path.
-- **The schema is generated.** Each value reference, from `ctx.value(path, type)` or a `{{ values.a.b }}` placeholder (always a string), becomes a required, typed property; objects are strict (`additionalProperties: false`), except that `global` is allowed so the chart also works as a subchart. Two references to the same path with different types fail the render. The cost, accepted: a mistyped path becomes a new required value instead of a render error, so it surfaces at `helm template` rather than `stagecraft render`, and the generated schema has no descriptions, enums, or patterns.
+- **The schema is generated.** Each value reference, from `ctx.value(path, type)` or a `{{ values.a.b }}` placeholder (always a string), becomes a required, typed property; `global` is declared so the chart also works as a subchart. Two references to the same path with different types fail the render. Objects are not strict (decided in slice 13): `required` already catches a missing or misspelled value, and `additionalProperties: false` would only make unused values fatal, so removing a pipeline would break every installation until its values file changed in lockstep. The cost, accepted: a mistyped path becomes a new required value instead of a render error, so it surfaces at `helm template` rather than `stagecraft render`, and the generated schema has no descriptions, enums, or patterns.
 - **Framework values** live under the reserved `stagecraft` key (for example `stagecraft.sources`). A reference into `stagecraft.` from an action or pipeline fails the render.
 - **Not generated:** what pipelines depend on by name: the workflow service account and RBAC, the Secrets (GitHub token, git credentials), the artifact repository, and controller defaults. Whatever deploys them today keeps doing so; the chart refers to them through values.
 - **As a subchart.** Not needed, but possible: vendored into another chart's `charts/` directory, listed in its `Chart.yaml` dependencies (Helm 4.1 `helm lint` requires the listing), with its values under the chart's name. Helm validates a subchart's schema against its scoped values (verified with Helm 4.1.0).
-- **CLI.** `render` writes the chart; `check` compiles without writing. `--values-schema` and `--values-prefix` are removed.
+- **CLI.** `render --out <dir> [--chart-name <name>]` writes the chart (name `pipelines` by default; version fixed at `0.0.0`, since the chart is committed rather than published); `check` compiles without writing. `--values-schema` and `--values-prefix` are removed.

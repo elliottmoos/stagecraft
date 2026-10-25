@@ -2,18 +2,18 @@ import pytest
 from pydantic import ValidationError
 
 from stagecraft.compile import compile_pipeline
+from stagecraft.context import CompileContext
 from stagecraft.errors import CompileError
 from stagecraft.spec import Param, Pipeline, Stage, Step
 
 from fixtures.actions import Shell
-from fixtures.contract import CONTEXT
 from fixtures.pipelines import status
 
 COMMIT = [Param("repo", required=True), Param("sha", required=True)]
 
 
 def manifest(pipeline):
-    return compile_pipeline(pipeline, CONTEXT).to_dict()
+    return compile_pipeline(pipeline, CompileContext()).to_dict()
 
 
 def template(m, name):
@@ -155,7 +155,7 @@ def test_status_placeholders_are_rejected_outside_the_reporter():
     pipeline = Pipeline(name="p", stages=[Stage("s", [Shell(script="{{ status.state }}")])])
 
     with pytest.raises(CompileError, match="only available in the status_reporter"):
-        compile_pipeline(pipeline, CONTEXT)
+        compile_pipeline(pipeline, CompileContext())
 
 
 def test_status_contexts_must_be_unique():

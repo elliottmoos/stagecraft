@@ -1,8 +1,8 @@
 # Stagecraft
 
-Python framework and CLI that compiles CI/CD pipelines (ordered stages of parallel steps) into
-Helm-compatible Argo Workflows `WorkflowTemplate` and `CronWorkflow` manifests, using Hera as the
-compiler. `DESIGN.md` is the spec; read the relevant section before changing behavior.
+Python framework and CLI that compiles CI/CD pipelines (ordered stages of parallel steps) into a
+generated Helm chart of Argo Workflows `WorkflowTemplate` and `CronWorkflow` manifests, using Hera
+as the compiler. `DESIGN.md` is the spec; read the relevant section before changing behavior.
 `README.md` is the overview and `docs/` the step-by-step guide (`docs/reference.md` lists every
 field); keep both in step with behavior changes. `tests/unit/test_readme.py` and
 `tests/snapshots/test_docs.py` compile their examples (fences tagged `file=<path>` in `docs/`).
@@ -78,24 +78,26 @@ uv run pytest -m integration             # behavior tests on kind (run scripts/k
 uv run pytest --snapshot-update          # accept snapshot changes (review the diff)
 uv run ruff check . && uv run ruff format --check .
 
-uv run stagecraft render <pipeline files or dirs> --values-schema <chart>/values.schema.json --out <dir>
-uv run stagecraft check <pipeline files or dirs> --values-schema <chart>/values.schema.json
+uv run stagecraft render <pipeline files or dirs> --out <chart dir> [--chart-name <name>]
+uv run stagecraft check <pipeline files or dirs>
 uv run stagecraft graph <pipeline files or dirs> [--pipeline <name>]   # Mermaid
 uv run stagecraft contexts <pipeline files or dirs>
 
 ./scripts/kind-up.sh                     # kind cluster "stagecraft" + Argo (version from ARGO_VERSION)
+./scripts/kind-demo.sh [--clean]         # install every fixture pipeline into kind (shares the tests' release)
+./scripts/kind-ui.sh                     # Argo UI at https://localhost:2746 (port-forward)
 kind delete cluster --name stagecraft
 
 # Regenerate kubeconform schemas when bumping Argo (also updates ARGO_VERSION)
 uv run python scripts/gen_crd_schemas.py <argo-version> tests/fixtures/crd-schemas
 ```
 
-`tests/snapshots/test_rendered.py` renders each fixture pipeline into a temporary copy of the
-fixture chart and runs `helm template`, `argo lint --offline`, and kubeconform on the result. By
-hand:
+`tests/snapshots/test_rendered.py` renders each fixture pipeline as a generated chart and runs
+`helm template` (with the test-only `tests/fixtures/values.yaml`), `argo lint --offline`, and
+kubeconform on the result. By hand:
 
 ```sh
-helm template fixture <chart> > out/rendered.yaml
+helm template fixture <chart> -f tests/fixtures/values.yaml > out/rendered.yaml
 argo lint --offline out/rendered.yaml
 kubeconform -strict -summary -schema-location default \
   -schema-location 'tests/fixtures/crd-schemas/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
@@ -113,25 +115,29 @@ that way so tests never touch the user's current kube context.
   turns into `{{ .Values.a.b | quote }}` (strings) or `{{ .Values.a.b | toJson | quote }}`
   (numbers and booleans: Helm's `quote` prints 1000000 as "1e+06"). Secrets are value-referenced names (for example
   `SecretEnv(secret_name=ctx.value(...))`), never contents.
-- Only required, non-null, single-typed scalar values can be referenced (decided 2026-10-23).
+- Every value reference is recorded in `ctx.references`, and the generated `values.schema.json`
+  requires each with its type. Only single-typed scalars can be referenced (decided 2026-10-23);
+  placeholders are strings.
   Structured values (objects, arrays) wait until an action needs them (decided 2026-10-24); typed
   action inputs and outputs come with artifacts (`DESIGN.md` section 16).
 - Actions never emit Helm syntax. Only the serializer does, and it escapes all Argo expressions in
   one pass.
-- A reference to a value missing from the contract, or of the wrong type, must fail rendering.
-  Never silently default.
+- A path used with two types, as both a value and an object, with non-identifier keys, or under
+  the reserved `stagecraft` key must fail rendering. Never add defaults or optional values.
 - Authors never write `depends`, `onExit`, or `hooks`. If a primitive cannot be expressed, fix the
   compiler.
-- Stagecraft never generates chart files or the values contract. The fixture chart under
-  `tests/fixtures/` is test-only and never published.
+- Stagecraft writes only `Chart.yaml`, `values.schema.json`, and `templates/` of the chart it
+  generates (decided 2026-10-25): never `values.yaml`, and never the service accounts, RBAC, or
+  Secrets pipelines refer to. It writes only into a missing or empty directory, or a chart it generated.
+  `tests/fixtures/values.yaml` is test-only and never published.
 - Actions hold only their own fields and `compile`; a `Step` places one in a stage with a name,
   `when`, `status`, and handlers (decided 2026-10-25). Don't add step features to `Action`.
 - Handlers see Stagecraft outcomes (`{{ step.outcome }}`: `succeeded`, `failed`), never Argo
   phases. The status reporter keeps host-style states (`success`, `failure`, `error`).
 - There is no shared filesystem: each step runs in its own pod, and files will cross step
   boundaries only as artifacts (decided 2026-10-25). Don't add volumes shared between steps.
-- `DESIGN.md` section 16 is the target model for the next slices (sources, artifacts, the
-  generated chart, conditions). Read it before changing the authoring model.
+- `DESIGN.md` section 16 is the target model for the next slices (sources, artifacts,
+  conditions). Read it before changing the authoring model.
 - Hera's API changes between versions, so check the pinned version's docs rather than guessing.
 - Don't generalize before two or three real pipelines exist. `DESIGN.md` section 15 lists the
   deferred features and what would justify each; update it when one is built or newly deferred.
@@ -146,12 +152,12 @@ that way so tests never touch the user's current kube context.
 ## Layout
 
 ```
-src/stagecraft/   spec.py, context.py, contract.py, compile/, serialize/, graph.py, cli.py
-tests/unit/         plain functions, escaping, contract-validation logic
-tests/contract/     action contract and values-contract validation
+src/stagecraft/   spec.py, context.py, chart.py, compile/, serialize/, graph.py, cli.py
+tests/unit/         plain functions, escaping, chart and schema generation
+tests/contract/     value references: recording, conflicts, rendering
 tests/snapshots/    compile + rendered-template snapshots
 tests/integration/  kind + Argo behavior tests (marked `integration`)
-tests/fixtures/     minimal actions, fixture schema, test-only fixture chart, CRD schemas
+tests/fixtures/     minimal actions, fixture pipelines, test-only values, CRD schemas
 docs/               user guide: numbered chapters (one cumulative example project) + reference
 ```
 

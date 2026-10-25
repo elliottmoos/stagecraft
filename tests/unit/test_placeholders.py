@@ -28,7 +28,7 @@ def test_values_placeholders_resolve_through_the_given_resolver():
 
 
 def test_values_placeholders_need_a_resolver():
-    with pytest.raises(CompileError, match="needs a values contract"):
+    with pytest.raises(CompileError, match="needs a compile context"):
         lower("{{ values.notify.channel }}", params=set())
 
 

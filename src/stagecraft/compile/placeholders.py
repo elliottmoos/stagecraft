@@ -17,7 +17,7 @@ _SCOPED = {
 }
 
 Scopes = Mapping[str, Mapping[str, str]]
-# Resolves `{{ values.a.b }}` to a validated value reference (CompileContext.value).
+# Resolves `{{ values.a.b }}` to a recorded value reference (CompileContext.value).
 Values = Callable[[str], str]
 
 
@@ -30,7 +30,7 @@ def lower(
 ) -> str:
     """Lower placeholders in `text`.
 
-    `values` resolves `{{ values.a.b }}`; it validates the path against the values contract.
+    `values` resolves `{{ values.a.b }}` to a recorded value reference (CompileContext.value).
 
     `scopes` maps each scoped namespace available here ("step" in handlers, "status" in the
     status reporter) to its fields and the Argo expressions that provide them.
@@ -60,7 +60,7 @@ def lower(
                 )
             return fields[path]
         if values is None:
-            raise CompileError(f"'{{{{ values.{path} }}}}' needs a values contract")
+            raise CompileError(f"'{{{{ values.{path} }}}}' needs a compile context")
         return values(path)
 
     return _PLACEHOLDER.sub(replace, text)

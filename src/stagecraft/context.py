@@ -1,58 +1,60 @@
-"""CompileContext: the one object the compiler passes to every action. See DESIGN.md section 8.
+"""CompileContext: the one object the compiler passes to every action. See DESIGN.md section 16.
 
 Actions get Helm values only through `CompileContext.value`, never by writing Helm syntax. A value
 reference is returned as a marker string, so it fits any string field an action builds; the
 serializer turns markers into Helm expressions after escaping Argo expressions. A marker records
 whether the value is a string or another scalar, which Helm must print with `toJson`.
+
+The context records every reference and its type. The generated chart's values schema is built
+from those records, so each referenced value is required, with the type it is used as.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from stagecraft.contract import ValuesContract
 from stagecraft.errors import CompileError
 
 # <<values:a.b>> for a string, <<values:a.b|json>> for a number or boolean.
 VALUE_MARKER = re.compile(r"<<values:([A-Za-z0-9_.]+)(\|json)?>>")
 
-_SCALARS = {"string", "integer", "number", "boolean"}
-_EXPECTED = {
-    str: ("string", {"string"}),
-    int: ("integer", {"integer"}),
-    float: ("number", {"number", "integer"}),
-    bool: ("boolean", {"boolean"}),
-}
+SCALARS = (str, int, float, bool)
+# Keys must be usable as `.Values.a.b` in a Helm template.
+_PATH = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
+# Framework values (DESIGN.md section 16) live under this key; actions and pipelines can't use it.
+RESERVED = "stagecraft"
 
 
-@dataclass(frozen=True)
+@dataclass
 class CompileContext:
-    contract: ValuesContract
+    references: dict[str, type] = field(default_factory=dict)
 
-    def value(self, path: str, expected: type | None = None) -> str:
-        """Reference the required Helm value at `path` (dotted, relative to the values prefix).
-
-        `expected` is the Python type the action uses the value as: str, int, float, or bool.
-        None accepts any scalar, which is how `{{ values.a.b }}` placeholders are checked.
-        Raises CompileError if the contract does not guarantee a value of that type.
-        """
-        if expected is not None and expected not in _EXPECTED:
+    def value(self, path: str, expected: type = str) -> str:
+        """Reference the Helm value at `path` (dotted), used as `expected`: str, int, float, or
+        bool. Raises CompileError if `path` is not a dotted identifier, is reserved, or is
+        already used with another type or as an object."""
+        if expected not in SCALARS:
             raise CompileError(
                 f"value {path!r}: only scalar values (str, int, float, bool) are supported, "
                 f"not {expected.__name__}"
             )
-        types = self.contract.types(path)
-        full = self.contract.full_path(path)
-        if "null" in types:
-            raise CompileError(f"value {full!r} is nullable in the values schema")
-        usage, allowed = _EXPECTED[expected] if expected else ("a scalar", _SCALARS)
-        if not types <= allowed:
-            declared = "/".join(sorted(types))
+        if not _PATH.fullmatch(path):
             raise CompileError(
-                f"value {full!r} is {declared} in the values schema, but is used as {usage}"
+                f"value {path!r}: paths must be dotted identifiers ([A-Za-z_][A-Za-z0-9_]*), "
+                "so they work as .Values.a.b"
             )
-        if "string" in types and len(types) > 1:
+        if path.split(".")[0] == RESERVED:
+            raise CompileError(f"value {path!r}: {RESERVED!r} is reserved for framework values")
+        known = self.references.get(path)
+        if known is not None and known is not expected:
             raise CompileError(
-                f"value {full!r} mixes string with other types in the values schema; "
-                "give it a single type"
+                f"value {path!r} is used as {expected.__name__} here but as {known.__name__} "
+                "elsewhere; give it one type"
             )
-        return f"<<values:{full}>>" if types == {"string"} else f"<<values:{full}|json>>"
+        for other in self.references:
+            if other.startswith(f"{path}.") or path.startswith(f"{other}."):
+                raise CompileError(
+                    f"value {path!r}: {min(path, other, key=len)!r} would be both a value and an "
+                    f"object (also used: {other!r})"
+                )
+        self.references[path] = expected
+        return f"<<values:{path}>>" if expected is str else f"<<values:{path}|json>>"

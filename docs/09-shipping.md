@@ -1,68 +1,67 @@
 # 9. Shipping pipelines
 
-A pipeline is only useful once it's installed. This chapter connects the pipelines repo to the
-chart that installs its templates, and sets up checks on both sides.
+A pipeline is only useful once it's installed. This chapter covers getting the generated chart
+into a cluster, and the checks that keep it installable.
 
 ## The flow
 
 ```
-pipelines repo                          chart repo
-  actions.py, pipelines/*.py              values.schema.json (the contract)
-        │                                 values.yaml, values-<env>.yaml
-        │  stagecraft render  ◀───────────────┘ (reads the schema)
-        ▼
-  templates/*.yaml  ──────────────────▶ templates/pipelines/*.yaml
-                                              │ helm install / upgrade, per environment
-                                              ▼
-                                        Argo Workflows
+pipelines repo
+  actions.py, pipelines/*.py ── stagecraft render ──▶ chart/ (Chart.yaml, values.schema.json, templates/)
+  values/<env>.yaml ─────────────────────────────────────┐ │
+                                                         ▼ ▼
+                                        helm upgrade --install, per environment
+                                                          │
+                                                          ▼
+                                                   Argo Workflows
 ```
 
-Render into a directory of the chart's `templates/` (Helm reads subdirectories):
+Render into the chart directory and commit it:
 
 ```sh
-uv run stagecraft render pipelines \
-  --values-schema ../chart/values.schema.json \
-  --out ../chart/templates/pipelines
+uv run stagecraft render pipelines --out chart
 ```
 
-Each pipeline becomes one file, `<pipeline>.yaml`, holding its `WorkflowTemplate` and any
-`CronWorkflow`s. Rendering is deterministic: the same pipelines and the same stagecraft version
-always give the same files.
+Each pipeline becomes one file, `templates/<pipeline>.yaml`, holding its `WorkflowTemplate` and
+any `CronWorkflow`s; `values.schema.json` requires every Helm value they use. Rendering is
+deterministic: the same pipelines and the same stagecraft version always give the same files, so
+reviewers see every change to what's installed as a diff.
 
-How the files get from one repo to the other is up to you: commit them into the chart repo from
-the pipelines repo's CI (reviewers then see every change to the generated manifests as a diff), or
-publish them as a build artifact the chart's build picks up.
-
-## Checks in the pipelines repo
+The chart is its own Helm release, installed next to whatever provides the things pipelines refer
+to by name (the workflow service account, Secrets, the artifact repository):
 
 ```sh
-uv run pytest                                                    # your action tests
-uv run stagecraft check pipelines --values-schema <chart>/values.schema.json
+helm upgrade --install pipelines chart -f values/staging.yaml -n argo
 ```
 
-`check` does everything `render` does except write files: it loads every pipeline, compiles it,
-and checks every value reference against the chart's schema. Run it against the schema of the
-chart version you'll install into, so a value the chart removed or retyped fails here, before
-anything ships.
+Stagecraft never writes a `values.yaml` into the chart. Keep values per environment, wherever
+your deployment tooling (Helm, Argo CD, ...) reads them from.
 
-## Checks in the chart repo
+## Checks in CI
 
-Stagecraft's output is ordinary templates, so the chart validates it with ordinary tools. For
-each environment's values:
+For each environment's values:
 
 ```sh
-helm template ci . -f values-staging.yaml > rendered.yaml
+uv run pytest                                  # your action tests
+uv run stagecraft render pipelines --out chart
+git diff --exit-code chart                     # the committed chart is up to date
+helm template pipelines chart -f values/staging.yaml > rendered.yaml
 argo lint --offline rendered.yaml
 kubeconform -strict -schema-location default \
   -schema-location '<Argo CRD schemas>/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
   rendered.yaml
 ```
 
-- `helm template` also validates the values against `values.schema.json`, so an environment
-  missing a required value fails here.
+- `render` fails on anything that can't compile: an undeclared param, a value used with two
+  types, a misplaced placeholder.
+- `git diff --exit-code` catches a pipeline change committed without re-rendering.
+- `helm template` validates the environment's values against the generated schema, so a missing
+  or wrongly typed value fails here, not at install time.
 - `argo lint` checks the workflows the way the Argo controller will.
 - kubeconform needs JSON schemas for Argo's CRDs (`WorkflowTemplate`, `CronWorkflow`), for
   example from a CRD schema catalog or generated from the Argo release you run.
+
+`stagecraft check pipelines` compiles without writing, for a quicker local check.
 
 Stagecraft targets Argo Workflows 4.1.6 and Helm 4; use matching versions of `argo` and `helm`
 in CI.
@@ -70,8 +69,7 @@ in CI.
 ## Upgrading stagecraft
 
 Stagecraft is pinned exactly in the pipelines repo. To upgrade, bump the pin, render, and review
-the diff of the generated templates like any other change. If the generated templates are
-committed, that diff is in the pull request.
+the diff of the generated chart like any other change: it's in the pull request.
 
 ## Using it day to day
 
@@ -86,9 +84,9 @@ committed, that diff is in the pull request.
 
 ## Recap
 
-- `render` writes one file per pipeline into the chart's templates; how it reaches the chart repo
-  is your choice.
-- The pipelines repo runs action tests and `stagecraft check` against the chart's schema.
-- The chart repo runs `helm template`, `argo lint`, and kubeconform per environment.
+- `render` writes a complete chart; commit it, and install it as its own release with each
+  environment's values.
+- CI renders and checks the chart is up to date, then runs `helm template` (which validates the
+  values), `argo lint`, and kubeconform per environment.
 
 Next: [10. Designing pipelines](10-designing-pipelines.md), which puts it all together.

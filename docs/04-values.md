@@ -1,9 +1,9 @@
-# 4. Helm values and the contract
+# 4. Helm values
 
 Pipelines run in more than one place: a staging cluster and a production cluster may use
-different registries, Secrets, and machine sizes. Those details are **Helm values**, owned by the
-chart. This chapter covers how actions and pipelines use them, and the contract that makes every
-use safe.
+different registries, Secrets, and machine sizes. Those details are **Helm values**, supplied per
+installation. This chapter covers how actions and pipelines use them, the schema Stagecraft
+generates from that use, and how Helm checks each installation against it.
 
 ## Two ways to reference a value
 
@@ -23,42 +23,49 @@ Both mean "the value at `.Values.<path>` in this installation." Neither gives yo
 itself: Stagecraft runs before any installation exists. What you get back is a reference that
 renders as a Helm expression, which Helm fills in at install time.
 
-`type` is how the action uses the value: `str`, `int`, `float`, or `bool`. Placeholders accept
-any scalar type.
+`type` is how the action uses the value: `str` (the default), `int`, `float`, or `bool`.
+Placeholders are always strings.
 
-## The contract
+## The generated schema
 
-The chart's `values.schema.json` is the contract. Every reference is checked against it at
-render time, and any problem fails the render, naming the pipeline, stage, step, and path. A
-referenced value must be:
+Every reference is recorded, and `stagecraft render` writes them all into the chart's
+`values.schema.json`: each referenced value is **required**, with the type it's used as. Nothing
+is optional and nothing has a default, so a pipeline can rely on every value it uses.
 
-- **Declared**: under `properties` at every level. `additionalProperties: true` doesn't count: an
-  undeclared key isn't guaranteed to exist.
-- **Required at every level.** If a value might be missing, a pipeline can't rely on it. Mark it
-  required and give it a default in the chart's `values.yaml`.
-- **Non-null, with a single scalar type**: `string`, `integer`, `number`, or `boolean`. A
-  `["string", "null"]` or `["string", "integer"]` type is rejected.
-- **Reachable simply**: through `properties` and local `$ref`s (`#/$defs/...`). A path through
-  `oneOf`, `anyOf`, `allOf`, `not`, `if`, `patternProperties`, or `dependentSchemas` is rejected
-  rather than guessed at.
-- **Keyed by identifiers** (`[A-Za-z_][A-Za-z0-9_]*`), so it works as `.Values.a.b`. A key like
-  `alert-channel` can't be referenced.
+The render itself fails, naming the pipeline, stage, step, and path, when a reference can't be
+turned into a schema:
 
-The type must also match how it's used: `ctx.value("build.retries", str)` fails if the schema
-says `integer`.
-
-What the errors look like:
+- **Paths are dotted identifiers** (`[A-Za-z_][A-Za-z0-9_]*` per key), so they work as
+  `.Values.a.b`. A key like `alert-channel` can't be referenced.
+- **One type per path.** Using `build.retries` as an `int` in one action and a string in another
+  fails.
+- **A path is a value or an object, not both.** `images` and `images.build` can't both be values.
+- **`stagecraft` is reserved** for Stagecraft's own values.
 
 ```
-pipeline 'service-ci', stage 'verify', step 'lint': value 'build.memory' is not declared in the values schema (no property 'memory' under build)
-pipeline 'service-ci', stage 'verify', step 'lint': value 'build.region' is optional in the values schema ('region' is not required); only required values can be referenced
-value 'build.retries' is integer in the values schema, but is used as string
+pipeline 'service-ci', stage 'verify', step 'lint': value 'build.retries' is used as str here but as int elsewhere; give it one type
 ```
+
+## Checking an installation
+
+Helm validates each installation's values against the generated schema at `helm template` and
+`helm install`, before anything reaches the cluster:
+
+```
+Error: values don't meet the specifications of the schema(s) in the following chart(s):
+pipelines:
+- at '/images/build': got number, want string
+- at '/build': missing property 'memory'
+```
+
+A typo in a value path inside an action shows up here too: the misspelled path becomes a new
+required value that no values file sets. Run `helm template` with each environment's values in
+CI (chapter 9) to catch it before merging.
 
 ## Growing the example
 
 Builds need different machine sizes per cluster, so `Make` takes its resource requests from the
-chart:
+installation's values:
 
 ```python file=actions.py
 import re
@@ -115,9 +122,9 @@ the helper checks units like `Gi` when the action is compiled, and a value refer
 quantity yet. The general rule: if a Hera helper validates a field's content, use the plain model
 for value references.
 
-The chart declares the new values. `$defs` keeps repeated shapes in one place:
+The staging values grow to match:
 
-```yaml file=chart/values.yaml
+```yaml file=values/staging.yaml
 images:
   shell: alpine:3.22
   build: golang:1.25
@@ -126,70 +133,22 @@ build:
   memory: 2Gi
 ```
 
-```json file=chart/values.schema.json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "required": ["images", "build"],
-  "properties": {
-    "images": {
-      "type": "object",
-      "required": ["shell", "build"],
-      "properties": {
-        "shell": {"$ref": "#/$defs/image"},
-        "build": {"$ref": "#/$defs/image"}
-      }
-    },
-    "build": {
-      "type": "object",
-      "required": ["cpu", "memory"],
-      "properties": {
-        "cpu": {"type": "string", "description": "CPU request for build steps"},
-        "memory": {"type": "string", "description": "Memory request for build steps"}
-      }
-    }
-  },
-  "$defs": {
-    "image": {"type": "string", "description": "A container image reference"}
-  }
-}
-```
+`cpu` is quoted because the action uses it as a string: an unquoted `1` is a number, and Helm
+would reject it.
 
-`Make` now needs `build.cpu` and `build.memory`, so its test's contract grows too. An action's
-test contract lists exactly what the action needs, which also documents it:
+`Make`'s test records the new references, which documents what it needs:
 
 ```python file=tests/test_actions.py
 import pytest
 from pydantic import ValidationError
 
 from stagecraft.context import CompileContext
-from stagecraft.contract import ValuesContract
-from stagecraft.errors import CompileError
 
 from actions import Make
 
 
-def strings(**groups: list[str]) -> dict:
-    """A schema requiring string values, such as strings(images=["build"])."""
-    return {
-        "type": "object",
-        "required": list(groups),
-        "properties": {
-            group: {
-                "type": "object",
-                "required": keys,
-                "properties": {key: {"type": "string"} for key in keys},
-            }
-            for group, keys in groups.items()
-        },
-    }
-
-
-CONTEXT = CompileContext(ValuesContract(strings(images=["build"], build=["cpu", "memory"])))
-
-
 def test_make_runs_its_target():
-    container = Make(target="lint").compile(CONTEXT)
+    container = Make(target="lint").compile(CompileContext())
 
     assert container.command == ["make"]
     assert container.args == ["lint"]
@@ -200,11 +159,12 @@ def test_make_accepts_one_target_only():
         Make(target="lint test")
 
 
-def test_make_needs_its_build_resources_from_the_chart():
-    no_resources = CompileContext(ValuesContract(strings(images=["build"])))
+def test_make_needs_the_build_image_and_resources():
+    ctx = CompileContext()
 
-    with pytest.raises(CompileError, match="build.cpu"):
-        Make(target="lint").compile(no_resources)
+    Make(target="lint").compile(ctx)
+
+    assert ctx.references == {"images.build": str, "build.cpu": str, "build.memory": str}
 ```
 
 ## How values render
@@ -241,25 +201,21 @@ SecretEnv(
 
 Chapter 7 uses exactly this.
 
-## A nested chart: `--values-prefix`
+## As a subchart
 
-If the chart keeps these values under a key, for example `ci:` in an umbrella chart, keep the
-value paths short and render with a prefix:
-
-```sh
-uv run stagecraft render pipelines --values-schema chart/values.schema.json \
-  --values-prefix ci --out chart/templates
-```
-
-`ctx.value("images.build", str)` then refers to `.Values.ci.images.build`.
+The generated chart is self-contained, but it also works as a subchart: vendor it into another
+chart's `charts/` directory, list it under that chart's `dependencies`, and put its values under
+the chart's name (`pipelines:` by default). Helm validates them against the generated schema
+there too.
 
 ## What isn't supported (yet)
 
-- **Optional values.** There are no fallbacks or guards: a pipeline uses only what the chart
-  guarantees.
+- **Optional values and defaults.** Every referenced value is required.
 - **Objects and arrays** (a whole `tolerations` list or `resources` block from values). Reference
   scalars inside an object the action builds instead, as `Make` does with `requests={...}`.
 - **Values in integer-only or boolean fields.**
+- **Descriptions in the schema.** The generated schema has types, not documentation; describe
+  values next to your values files.
 
 These are listed, with what would justify each, in
 [DESIGN.md section 15](../DESIGN.md#15-deferred-features).
@@ -267,9 +223,10 @@ These are listed, with what would justify each, in
 ## Recap
 
 - `ctx.value(path, type)` in `compile`, `{{ values.a.b }}` in fields: both become Helm
-  expressions.
-- The chart's schema is the contract: required, non-null, single-typed scalars, reached through
-  `properties` and local `$ref`s.
+  expressions, and both are recorded.
+- The chart's `values.schema.json` is generated from those references: every value required,
+  with one scalar type.
+- Values come per installation; Helm checks them against the schema at install time.
 - Values always render as strings; Secrets are referenced by name.
 
 Next: [5. Stages, params, and conditions](05-stages-and-flow.md).
