@@ -21,11 +21,10 @@ class Make(Block):            # 1. a subclass of stagecraft.spec.Block
 2. **Fields.** Anything an author should be able to set. Use defaults generously so the common
    case is short.
 3. **`compile(self, ctx)`** returns one Hera `Container` or `Script`. Stagecraft names it, wires
-   it into the workflow, and adds anything the pipeline asks for (handlers, statuses, the
-   workspace).
+   it into the workflow, and adds anything the pipeline asks for (handlers, statuses).
 
 Every block also inherits a few fields from `Block`, covered in later chapters: `name`, `when`,
-`status`, `on_success`, `on_failure`, `finally_`, and `workspace`.
+`status`, `on_success`, `on_failure`, and `finally_`.
 
 ## A reusable block
 
@@ -174,10 +173,9 @@ class Python(Block):
         return Script(image=ctx.value("images.python", str), command=["python"], source=self.source)
 ```
 
-Two kinds of fields will matter later. **Container fields** (image, command, args, env,
-resources, working directory) describe the container itself. **Template fields** (retries,
-timeouts, service account, node selection) describe the pod around it. Chapter 8 shows a case
-where only container fields are allowed.
+A block can set **container fields** (image, command, args, env, resources, working directory),
+which describe the container itself, and **template fields** (retries, timeouts, service account,
+node selection), which describe the pod around it.
 
 Rules for `compile`:
 

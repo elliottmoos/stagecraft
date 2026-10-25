@@ -95,8 +95,8 @@ class Make(Block):
         )
 ```
 
-The pipeline gains params, a `prepare` stage (a stand-in until chapter 8 adds a real checkout),
-and a `deploy` stage that only runs when asked:
+The pipeline gains params, a `prepare` stage (a stand-in for a real checkout), and a `deploy`
+stage that only runs when asked:
 
 ```python file=pipelines/service_ci.py
 from stagecraft.spec import Param, Pipeline, Stage

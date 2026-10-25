@@ -6,8 +6,7 @@ Everything in one place. The [guide](README.md) explains each item in context.
 
 | Import | What |
 |---|---|
-| `from stagecraft.spec import Pipeline, Stage, Block, Param, Trigger, Workspace` | The authoring models |
-| `from stagecraft.spec import WORKSPACE_PATH` | `"/workspace"`, where the workspace is mounted |
+| `from stagecraft.spec import Pipeline, Stage, Block, Param, Trigger` | The authoring models |
 | `from stagecraft.context import CompileContext` | The `ctx` passed to `Block.compile` |
 | `from stagecraft.contract import ValuesContract` | A values contract, for block tests |
 | `from stagecraft.compile import compile_pipeline, compile_triggers` | Compile in tests |
@@ -24,7 +23,6 @@ Everything in one place. The [guide](README.md) explains each item in context.
 | `on_success`, `on_failure` | list[Block] | `[]` | Run after the run ends; a failure here fails the run |
 | `status` | str | None | Commit-status context for the whole run |
 | `status_reporter` | Block | None | Required if any step has a status |
-| `workspace` | Workspace | None | Required if any block declares workspace access; an error if none does |
 | `triggers` | list[Trigger] | `[]` | Unique names |
 
 Statuses also require params `repo` and `sha`, both `required=True`. Status contexts are unique
@@ -40,8 +38,6 @@ across the pipeline.
 | `status` | str | None | Commit-status context |
 | `on_success`, `on_failure`, `finally_` | list[Block] | `[]` | Handlers |
 
-A block with `workspace="write"` must be its stage's only block using the workspace.
-
 ## `Block`
 
 Subclass it, add fields, and implement `compile(self, ctx: CompileContext) -> Container | Script`.
@@ -52,11 +48,9 @@ Subclass it, add fields, and implement `compile(self, ctx: CompileContext) -> Co
 | `when` | str | None | As for stages |
 | `status` | str | None | As for stages |
 | `on_success`, `on_failure`, `finally_` | list[Block] | `[]` | Handlers |
-| `workspace` | `"none"`, `"read"`, `"write"` | `"none"` | Workspace access |
 
-Handler blocks and the status reporter can't set `when`, `status`, handlers, or `workspace`.
-Blocks sharing a containerset pod can't set `when`, `status`, or handlers, must compile to a
-`Container`, and may only set container fields.
+Handler blocks and the status reporter can't set `when`, `status`, or handlers. Each block runs
+in its own pod; no files are shared between blocks.
 
 ## `Param(name, /, ...)`
 
@@ -69,13 +63,6 @@ Blocks sharing a containerset pod can't set `when`, `status`, or handlers, must 
 | `description` | str | None | Shown in the submit form |
 
 Param fields are literal: placeholders aren't replaced in them.
-
-## `Workspace`
-
-| Field | Type | Notes |
-|---|---|---|
-| `strategy` | `"containerset"` | The only strategy so far |
-| `size` | str | Kubernetes quantity, such as `"5Gi"` |
 
 ## `Trigger.cron(schedule, /, ...)`
 
@@ -125,7 +112,6 @@ Values always render as strings.
 | Entrypoint DAG | `main` |
 | A stage's DAG | `<stage>` |
 | A block | `<stage>-<block>` |
-| A stage's shared containerset pod | `<stage>-workspace` |
 | A step's handler DAG / a handler | `<stage>[-<block>]-on-exit` / `<stage>[-<block>]-<on-success\|on-failure\|finally>-<handler>[-succeeded\|-failed]` |
 | Pipeline handlers | `on-exit`, `on-success-<handler>`, `on-failure-<handler>` |
 | Status reporting | `status-report`, `status-reporter` |

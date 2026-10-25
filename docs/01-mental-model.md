@@ -16,7 +16,7 @@ deploy it." Stagecraft describes it with three nested ideas:
 ```mermaid
 flowchart LR
   subgraph s0["prepare"]
-    s0b0["clone"]
+    s0b0["fetch"]
   end
   subgraph s1["verify"]
     s1b0["lint"]
@@ -77,9 +77,9 @@ Stagecraft never writes `Chart.yaml`, `values.yaml`, or the schema. It only writ
 
 | You write (code) | You configure (data) | Fixed by Stagecraft |
 |---|---|---|
-| Block classes: their fields and the container they compile to | Pipelines, stages, params, conditions, handlers, statuses, workspace, triggers | How stages become an Argo DAG, how handlers and statuses are wired, how Helm values are rendered and escaped |
+| Block classes: their fields and the container they compile to | Pipelines, stages, params, conditions, handlers, statuses, triggers | How stages become an Argo DAG, how handlers and statuses are wired, how Helm values are rendered and escaped |
 
-Chapter 11 maps this out in detail. For now, the short version: **blocks are open, the pipeline
+Chapter 10 maps this out in detail. For now, the short version: **blocks are open, the pipeline
 structure is closed.** You can make a block do anything a container can do, and you combine
 blocks with a small, fixed vocabulary.
 
@@ -89,7 +89,7 @@ blocks with a small, fixed vocabulary.
 |---|---|
 | Block | A Python class that compiles to one container. One unit of work. |
 | Stage | Blocks that run in parallel. |
-| Pipeline | Ordered stages, plus params, handlers, statuses, workspace, and triggers. |
+| Pipeline | Ordered stages, plus params, handlers, statuses, and triggers. |
 | Param | A per-run input, shown in the Argo UI's submit form. |
 | Helm value | A per-installation input from the chart's values. |
 | Values contract | The chart's `values.schema.json`. |

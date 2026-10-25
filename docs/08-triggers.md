@@ -1,4 +1,4 @@
-# 9. Triggers
+# 8. Triggers
 
 Some runs should happen on a schedule: a nightly build of the main branch, a weekly dependency
 check. A **trigger** runs the pipeline on a schedule.
@@ -34,9 +34,9 @@ fails otherwise.
 A nightly build of `main`:
 
 ```python file=pipelines/service_ci.py
-from stagecraft.spec import Param, Pipeline, Stage, Trigger, Workspace
+from stagecraft.spec import Param, Pipeline, Stage, Trigger
 
-from blocks import Clone, GitHubStatus, Make, Notify
+from blocks import GitHubStatus, Make, Notify, Shell
 
 pipeline = Pipeline(
     name="service-ci",
@@ -48,33 +48,25 @@ pipeline = Pipeline(
     ],
     status="ci/pipeline",
     status_reporter=GitHubStatus(),
-    workspace=Workspace(strategy="containerset", size="5Gi"),
     stages=[
-        Stage("prepare", [Clone()]),
+        Stage("prepare", [Shell(name="fetch", script="echo fetching {{ param.repo }}")]),
         Stage(
             "verify",
             [
-                Make(name="lint", target="lint", workspace="read"),
-                Make(name="unit-tests", target="test", workspace="read"),
+                Make(name="lint", target="lint"),
+                Make(name="unit-tests", target="test"),
             ],
             status="ci/verify",
             on_failure=[Notify(message="{{ step.name }} failed for {{ param.sha }}")],
         ),
         Stage(
             "package",
-            [
-                Make(
-                    name="image",
-                    target="image",
-                    variables={"PUSH": "{{ param.push }}"},
-                    workspace="read",
-                ),
-            ],
+            [Make(name="image", target="image", variables={"PUSH": "{{ param.push }}"})],
             status="ci/package",
         ),
         Stage(
             "deploy",
-            [Make(name="staging", target="deploy-staging", workspace="read")],
+            [Make(name="staging", target="deploy-staging")],
             when="{{ param.deploy }} == 'true'",
             status="ci/deploy",
         ),
@@ -91,8 +83,8 @@ pipeline = Pipeline(
 )
 ```
 
-This renders a `CronWorkflow` named `service-ci-nightly`. `Clone` happily fetches a branch name,
-so the nightly run builds the head of `main`.
+This renders a `CronWorkflow` named `service-ci-nightly`, which runs the pipeline with `sha` set
+to `main`.
 
 ## Things to know
 
@@ -113,4 +105,4 @@ so the nightly run builds the head of `main`.
 - It compiles to a `CronWorkflow` that refers to the pipeline's template, in the same file.
 - Required params must be set; values may come from Helm values.
 
-Next: [10. Shipping pipelines](10-shipping.md).
+Next: [9. Shipping pipelines](09-shipping.md).

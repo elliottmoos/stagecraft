@@ -54,7 +54,7 @@ Four layers:
 CLI:
 - `stagecraft render <pipelines> --values-schema <path> --out <dir>`: compile, validate against the contract, write templates.
 - `stagecraft check <pipelines> --values-schema <path>`: the same compilation and contract validation as `render`, without writing files.
-- `stagecraft graph <pipelines> [--pipeline <name>]`: Mermaid diagram of a pipeline as authored (stages, blocks, `when`, statuses, workspace access, handlers), not of the compiled Argo templates. Labels are escaped with Mermaid entity codes; node ids are generated, so names like `end` are safe.
+- `stagecraft graph <pipelines> [--pipeline <name>]`: Mermaid diagram of a pipeline as authored (stages, blocks, `when`, statuses, handlers, triggers), not of the compiled Argo templates. Labels are escaped with Mermaid entity codes; node ids are generated, so names like `end` are safe.
 - `stagecraft contexts <pipelines>`: list commit-status contexts as `<pipeline><TAB><context>` lines, in pipeline order (for branch protection setup).
 
 Linting rendered output uses standard tools (`argo lint`, kubeconform), not reimplemented here.
@@ -67,7 +67,6 @@ Target shape of a pipeline file. This is the primary acceptance example, and the
 pipeline = Pipeline(
     name="service-ci",
     status="ci/pipeline",
-    workspace=Workspace(strategy="containerset", size="5Gi"),
     params=[
         Param("repo", required=True),
         Param("sha", required=True),
@@ -75,15 +74,13 @@ pipeline = Pipeline(
         Param("deploy", default="false", enum=["true", "false"]),
     ],
     stages=[
-        Stage("prepare", [Clone(repo="{{ param.repo }}", ref="{{ param.sha }}",
-                                workspace="write")]),
         Stage("verify", [
-            Lint(workspace="read"),
-            UnitTests(workspace="read"),
-            TypeCheck(workspace="read"),
+            Lint(),
+            UnitTests(),
+            TypeCheck(),
         ], status="ci/verify",
            on_failure=[Notify(channel="{{ values.notify.alertChannel }}")]),
-        Stage("package", [BuildImage(push="{{ param.push }}", workspace="read")],
+        Stage("package", [BuildImage(push="{{ param.push }}")],
               status="ci/package"),
         Stage("deploy", [DeployStaging()],
               when="{{ param.deploy }} == 'true'", status="ci/deploy"),
@@ -103,8 +100,7 @@ Rules:
   - Inside `when`, `{{ param.x }}` becomes a quoted string, so conditions compare strings (`{{ param.deploy }} == 'true'`). Argo parses bare words, so an unquoted `true == 'true'` is false.
 - Declared `Param`s, including descriptions and enums, become the Argo UI submit form.
 - Pipeline files contain no installation-specific literals. They reference Helm values by path.
-- `workspace=Workspace(strategy=..., size=...)` declares the workspace strategy at compile time. It is a pipeline property, not an installation property, and uses no Helm values (section 7). It is required whenever a block declares workspace access, and never inferred.
-- Blocks that share a `containerset` pod (the parallel readers in `verify` above) cannot set their own `when`, `status`, or handlers; the stage carries them (section 7).
+- Blocks share no files: each runs in its own pod. Sources and artifacts between jobs are section 16.
 
 ## 6. The block base type and its Argo mapping
 
@@ -113,7 +109,6 @@ A block is a unit with a typed contract. The framework's job is to map each cont
 | Block feature | Argo mechanism |
 |---|---|
 | Typed inputs / outputs (deferred, section 15) | Template `inputs` / `outputs` parameters and artifacts |
-| `workspace`: `none`, `read`, `write` | Volume mounts, `containerSet` grouping, or artifact transfer (section 7) |
 | Declared value references (path and expected type) | Helm expressions, validated against the chart's values contract |
 | Secret references | `secretKeyRef` env or volume; secret names come from Helm values, never secret contents |
 | Resources, retry, timeout, service account, node selection | Template fields, whose values come from Helm values |
@@ -147,26 +142,7 @@ Accepted gaps: `argo terminate` runs no exit handlers, and `argo stop` skips the
 
 Accepted gap (decided 2026-10-24; Kubernetes resources are eventually consistent anyway): Helm applies a release's `CronWorkflow`s before its `WorkflowTemplate`s. Helm 4.1.0 sorts kinds it doesn't know by name and creates resources in batches by kind, waiting for each batch (`lessByKind`, `batchPerform`); watching an install on kind showed the cron created 6.5 ms before its template. Argo 4.1.6 validates a new `CronWorkflow` against its template on arrival. If the template isn't there yet, the cron is marked invalid and not scheduled until the controller processes it again: about 3 minutes on kind, and at most its 20-minute informer resync. So the first ticks after an install that creates a cron can be missed. Inlining the workflow spec in each cron would avoid this, at the cost of bigger manifests and scheduled runs no longer linked to the template in the UI.
 
-**Workspace strategies.** Superseded by section 16 (no shared filesystem; files cross job boundaries only as artifacts) and removed in slice 11. Until then this describes the current code. Constraint: the current workspace is an EBS-backed PVC (ReadWriteOnce), which limits true cross-node parallelism. Blocks declare their workspace access, and the strategy is a compile-time choice stated explicitly in the pipeline definition (`workspace=Workspace(strategy=..., size=...)`); it is required when any block declares access, and never inferred (decided 2026-10-24). The strategy consumes no Helm values and nothing from the `CompileContext`: each rendered manifest has exactly one shape, visible in the pipeline file and the diff.
-
-1. `containerset`: a stage's workspace blocks, when there are two or more, run as containers of one `containerSet` pod. Implemented in slice 7:
-   - The workspace is one ReadWriteOnce claim per run (`volumeClaimTemplates`, the pipeline's `size`, no storage class), deleted when the run ends whether it succeeded or failed (`volumeClaimGC: OnWorkflowCompletion`). Stages run one after another, so only one pod mounts it at a time.
-   - It is mounted at `/workspace`, read-only for `read` blocks, and is the working directory unless the block's template sets one. Blocks with `workspace="none"` don't mount it and keep their own pods.
-   - A stage with one workspace block runs it in its own pod. A grouped stage's sub-DAG has one `workspace` task (template `<stage>-workspace`) holding a container per block, plus a task per non-workspace block.
-   - The mount is on the `containerSet`, not on each container: Argo 4.1.6 only adds a claim's volume to the pod for containerSet-level mounts. Since that mount applies to every container, a group holds only readers.
-   - Grouped blocks must compile to a `Container` (containerSets run no scripts) that sets only container fields (no retries, timeouts, inputs, or other template-level fields), and cannot set `when`, `status`, or handlers: Argo has no per-container conditions or hooks. Stage-level `when`, `status`, and handlers work as usual.
-   - A failing container fails the pod, and the stage, after its siblings finish (verified on 4.1.6). Resource requests are summed over the containers.
-2. `node-affinity`: pod affinity on the workflow label so parallel pods share the RWO volume on one node.
-3. `artifact`: prepare once, upload to object storage, each step works in its own `emptyDir` and uploads only declared outputs.
-
-A block that writes the workspace must be its stage's only block using it: parallel readers would race it, and two writers would need declared `paths` and an overlap check, deferred until a pipeline needs parallel writers. Handler blocks and the status reporter cannot use the workspace yet: whether an exit hook finishes before the next stage mounts the volume is unverified.
-
-Strategy options are limited to what the pipeline itself needs (for example workspace `size`). Platform details are never passed to a strategy as values. They resolve on the cluster at runtime:
-- Storage class: omitted, so the cluster's default StorageClass applies.
-- Artifact repository: the controller's default repository, or an `artifactRepositoryRef` set through `workflowDefaults`.
-- Affinity topology key: fixed (`kubernetes.io/hostname`).
-
-A strategy that cannot work without an installation-specific value is not supported until a mechanism for it is agreed. Changing the strategy for a pipeline means editing the pipeline file and re-rendering, which is intended, since it is a structural change that should appear in review.
+**No shared workspace.** Removed in slice 11 (section 16): each block runs in its own pod with private scratch, and files will cross job boundaries only as artifacts. Slice 7 had built a `containerset` strategy (one ReadWriteOnce claim per run; a stage's parallel readers as containers of one `containerSet` pod). Verified on Argo 4.1.6 while it existed, in case shared volumes return: a `containerSet` pod gets a claim's volume only for mounts on `containerSet.volumeMounts`, not on single containers (pod creation fails, and the workflow ends in Error); a failing container doesn't stop its siblings, and the pod fails after they finish; `volumeClaimGC: OnWorkflowCompletion` deletes the claim after failed runs too.
 
 ## 8. Configuration and the values contract
 
@@ -174,8 +150,6 @@ A strategy that cannot work without an installation-specific value is not suppor
 
 1. **A Helm value**, referenced by path. Used for structural values (node selectors, tolerations, storage class, resource defaults, service account) and for names of runtime objects.
 2. **Runtime late binding**: ConfigMap or Secret key refs, `artifactRepositoryRef`, and `workflowDefaults`, resolved by the cluster when the workflow runs. The ConfigMap or Secret *name* is typically a Helm value.
-
-**Exception by design: workspace strategy.** The workspace strategy is a compile-time pipeline decision and does not read Helm values. Platform details it needs resolve on the cluster through defaults (section 7).
 
 **The chart owns the contract.** The values contract is the chart's `values.schema.json` (Helm's native JSON Schema mechanism). Stagecraft is a consumer of that contract. From slice 13, Stagecraft generates the contract from the value references instead, and Helm enforces it when values are supplied (section 16); the resolver rules below then no longer apply, and the values prefix option is removed.
 
@@ -204,7 +178,7 @@ Decided: references must be **required** at every level of the schema and non-nu
 1. **Unit**: plain Python functions, escaping, and contract-validation logic.
 2. **Block contract**: a compiled block exposes exactly its declared inputs, outputs, and artifacts, and references only the value paths and types it declares. (Waits for typed inputs and outputs, section 15. Today blocks request values inside `compile` rather than declaring them up front, and every request is checked against the contract.)
 3. **Contract validation**: with a fixture schema, assert that a missing path, a wrong type, and an unhandled optional value each fail rendering with a clear error, and that a valid reference renders.
-4. **Composition**: each step's required inputs are produced by an earlier stage, status contexts are unique, and parallel `write` paths do not overlap. (Status contexts and workspace writers are checked; inputs and `paths` are deferred, section 15.)
+4. **Composition**: each step's required inputs are produced by an earlier stage, and status contexts are unique. (Status contexts are checked; inputs come with section 16.)
 5. **Compile and snapshot**: assert structure (dependencies, hooks, `onExit`, resources) and snapshot the rendered templates so every change appears in review.
 6. **Static validation** (from slice 13, on the generated chart with a test values file, and the fixture chart is removed): run `helm template` against a **test-only fixture chart** (with fixture values and schema) inside the stagecraft repo, then `argo lint` and kubeconform on the result. Include escaping tests for Argo expressions in scripts, `when`, and `depends`. The fixture chart is never published.
 7. **Behavior** (kind or k3d with Argo installed, small and slow): a `run_block` fixture wraps a block in a one-step workflow, installs the fixture chart, submits it, and asserts on phase and outputs. Separate tests deliberately fail and pass steps to prove hooks, `onExit`, and status sequences fire correctly, including skipped and cancelled cases.
@@ -222,7 +196,7 @@ stagecraft/
     spec.py          # Pipeline, Stage, Param, Trigger, Block base
     context.py       # CompileContext, value references
     contract.py      # values.schema.json loading and validation
-    compile/         # stages->DAG, hooks, onExit, workspace strategies
+    compile/         # stages->DAG, hooks, onExit, triggers
     serialize/       # Helm-compatible serializer, escaping
     graph.py
     cli.py
@@ -238,7 +212,7 @@ stagecraft/
 4. Step and stage hooks, including stage-as-sub-DAG.
 5. `status=` commit statuses with the skip and cancel cases.
 6. Block contract, `CompileContext`, value references, and contract validation against a schema.
-7. Workspace strategies (`containerset` first).
+7. Workspace strategies (`containerset` first). Removed again in slice 11.
 8. Helm escaping and `toYaml` handling hardened with tests.
 9. CLI polish (`check`, `graph`, `contexts`) and docs.
 10. Triggers: `Trigger.cron` compiled to `CronWorkflow` (added after the original plan, which had left it out).
@@ -271,10 +245,7 @@ Section 15 lists what was deliberately left out. Do not generalize before two or
 ## 13. Verify against the pinned Argo and Hera versions
 
 - Hook semantics: field names, expression scope, workflow-level `running` hooks, effect of a failing hook on workflow status, behavior on skipped nodes.
-- `containerSet` outputs, retries, resource summing, and failure status.
 - Template-level versus task-level hook firing.
-- Autoscaler behavior with `node-affinity` (a node must fit all parallel pods).
-- Whether each strategy works using only cluster defaults (default StorageClass and default artifact repository).
 - Argo CD sync order for CRDs versus chart contents, if Argo CD deploys the chart.
 - For section 16, on kind with its MinIO: a git input artifact checking out a commit that isn't a branch tip, at shallow depth; a global output parameter read by `onExit` and by exit hooks; artifacts routed through stage DAG outputs and inputs; an input artifact placed inside another (an artifact under the source checkout); whether a failed job's outputs are uploaded; `artifactGC` deleting objects when a workflow is deleted.
 - What `values.schema.json` can and cannot express (for example `$ref`, `oneOf`, defaults) and how much of it the validator must support.

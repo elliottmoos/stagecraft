@@ -1,4 +1,4 @@
-# 10. Shipping pipelines
+# 9. Shipping pipelines
 
 A pipeline is only useful once it's installed. This chapter connects the pipelines repo to the
 chart that installs its templates, and sets up checks on both sides.
@@ -91,4 +91,4 @@ committed, that diff is in the pull request.
 - The pipelines repo runs block tests and `stagecraft check` against the chart's schema.
 - The chart repo runs `helm template`, `argo lint`, and kubeconform per environment.
 
-Next: [11. Designing pipelines](11-designing-pipelines.md), which puts it all together.
+Next: [10. Designing pipelines](10-designing-pipelines.md), which puts it all together.

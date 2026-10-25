@@ -1,5 +1,5 @@
 from stagecraft.graph import mermaid
-from stagecraft.spec import Param, Pipeline, Stage, Trigger, Workspace
+from stagecraft.spec import Param, Pipeline, Stage, Trigger
 
 from fixtures.blocks import Shell
 
@@ -29,7 +29,7 @@ def test_stages_are_ordered_subgraphs_of_blocks():
     )
 
 
-def test_labels_show_when_status_and_workspace_access():
+def test_labels_show_when_and_status():
     pipeline = Pipeline(
         name="p",
         params=[
@@ -39,11 +39,10 @@ def test_labels_show_when_status_and_workspace_access():
         ],
         status="ci/p",
         status_reporter=Shell(name="report", script=""),
-        workspace=Workspace(strategy="containerset", size="1Gi"),
         stages=[
             Stage(
                 "deploy",
-                [Shell(name="apply", script="", workspace="read", status="ci/apply")],
+                [Shell(name="apply", script="", status="ci/apply")],
                 when="{{ param.deploy }} == 'true'",
             )
         ],
@@ -53,7 +52,7 @@ def test_labels_show_when_status_and_workspace_access():
 
     assert lines[1] == 'title: "p (status ci/p)"'
     assert "  subgraph s0[\"deploy<br/>when: {{ param.deploy }} == 'true'\"]" in lines, lines
-    assert '    s0b0["apply<br/>reads workspace<br/>status: ci/apply"]' in lines
+    assert '    s0b0["apply<br/>status: ci/apply"]' in lines
 
 
 def test_handlers_hang_off_their_step_with_dotted_edges():

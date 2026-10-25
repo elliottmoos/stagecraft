@@ -112,7 +112,7 @@ Rules for blocks:
 ## Pipelines
 
 ```python
-from stagecraft.spec import Param, Pipeline, Stage, Trigger, Workspace
+from stagecraft.spec import Param, Pipeline, Stage, Trigger
 
 from blocks import GitHubStatus, Shell
 
@@ -125,21 +125,12 @@ pipeline = Pipeline(
     ],
     status="ci/pipeline",
     status_reporter=GitHubStatus(),
-    workspace=Workspace(strategy="containerset", size="5Gi"),
     stages=[
-        Stage("prepare", [
-            Shell(
-                name="clone",
-                workspace="write",
-                script="git init -q . && git fetch -q --depth 1 "
-                "https://github.com/{{ param.repo }} {{ param.sha }} && git checkout -q FETCH_HEAD",
-            ),
-        ]),
         Stage(
             "verify",
             [
-                Shell(name="lint", workspace="read", script="make lint"),
-                Shell(name="unit-tests", workspace="read", script="make test"),
+                Shell(name="lint", script="make lint"),
+                Shell(name="unit-tests", script="make test"),
             ],
             status="ci/verify",
             on_failure=[
@@ -161,21 +152,20 @@ pipeline = Pipeline(
 ```
 
 - **Stages run in order; the blocks in a stage run in parallel.** A failing block fails its stage
-  and the pipeline, and later stages don't run.
+  and the pipeline, and later stages don't run. Each block runs in its own pod, and no files are
+  shared between blocks yet.
 - **Params** become the Argo UI's submit form (descriptions, enums, defaults).
 - **`when`** (stage or block) skips the step when false. Inside it, `{{ param.x }}` is a quoted
   string, so compare with quoted values: `"{{ param.deploy }} == 'true'"`.
 - **Handlers**: `on_success`, `on_failure`, and `finally_` blocks run after a stage, a block, or
   (`on_success`/`on_failure` only) the whole pipeline finishes. Handlers can't have their own
-  `when`, status, handlers, or workspace access. A failing pipeline handler fails the pipeline; a
+  `when`, status, or handlers. A failing pipeline handler fails the pipeline; a
   failing stage or block handler shows as failed but doesn't (an Argo limitation). A step skipped
   by `when` runs no handlers.
 - **Commit statuses**: `status="<context>"` on the pipeline, a stage, or a block reports pending,
   then success, failure, or error, through `status_reporter`. A step skipped by `when` reports
   success with the description "Skipped", so a required check doesn't hang. Reporting is
   best-effort and never fails the build. Statuses need required `repo` and `sha` params.
-- **Workspace**: blocks declare `workspace="read"` or `"write"`; the pipeline then needs
-  `workspace=Workspace(strategy="containerset", size=...)` (see below).
 
 ### Placeholders
 
@@ -206,21 +196,6 @@ Trigger.cron(
 Trigger params must be declared and must set every required param. Their values may use
 `{{ values.a.b }}`; schedules and time zones are literal. `<pipeline>-<name>` can be at most 52
 characters.
-
-### Workspace
-
-The workspace is one ReadWriteOnce volume per run, from the cluster's default StorageClass,
-mounted at `/workspace` (read-only for `read` blocks) and deleted when the run ends. It is the
-working directory of blocks that use it. Blocks with no `workspace` declared don't mount it.
-
-With the `containerset` strategy, a stage's workspace blocks, when there are two or more, run as
-containers of a single pod, so the volume is never mounted by two pods at once. That has limits:
-
-- A block that writes the workspace must be the only workspace block in its stage.
-- Blocks sharing the pod must compile to a `Container` that sets only container fields (no
-  retries, timeouts, or inputs), and can't have their own `when`, `status`, or handlers. Put those
-  on the stage.
-- The pod requests the sum of its containers' resources.
 
 ## The values contract
 
@@ -264,8 +239,8 @@ kubeconform -strict rendered.yaml   # with schemas for the Argo CRDs
 
 ## Known gaps
 
-- **Not built yet**: typed block inputs and outputs, structured (object or array) values, and
-  the `node-affinity` and `artifact` workspace strategies.
+- **Not built yet**: sharing files between blocks (framework-managed sources, and artifacts
+  passed between jobs; DESIGN.md section 16) and structured (object or array) values.
 - **Right after an install that creates a trigger**, its first ticks can be missed: Helm applies
   the CronWorkflow before the WorkflowTemplate it references, and Argo re-checks the cron only
   minutes later (at most 20).

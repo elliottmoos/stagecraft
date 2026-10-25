@@ -9,7 +9,6 @@ import json
 from stagecraft.spec import HANDLER_FIELDS, Block, Pipeline, Stage
 
 _HANDLER_LABELS = {"on_success": "on success", "on_failure": "on failure", "finally_": "finally"}
-_ACCESS = {"read": "reads workspace", "write": "writes workspace"}
 
 
 def mermaid(pipeline: Pipeline) -> str:
@@ -37,8 +36,6 @@ def mermaid(pipeline: Pipeline) -> str:
 
 def _label(name: str, step: Stage | Block) -> str:
     parts = [name]
-    if isinstance(step, Block) and step.workspace != "none":
-        parts.append(_ACCESS[step.workspace])
     if step.when:
         parts.append(f"when: {step.when}")
     if step.status:

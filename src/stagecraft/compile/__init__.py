@@ -7,15 +7,14 @@ with Hera's context managers, which keep module-level state.
 import dataclasses
 from collections.abc import Callable, Mapping
 
-from hera.workflows import DAG, ContainerSet, CronWorkflow, Parameter, Task, WorkflowTemplate
+from hera.workflows import DAG, CronWorkflow, Parameter, Task, WorkflowTemplate
 from hera.workflows.models import Arguments, ContinueOn, LifecycleHook, WorkflowTemplateRef
 from hera.workflows.models import Parameter as ParameterModel
 
-from stagecraft.compile import workspace
 from stagecraft.compile.placeholders import Scopes, lower, lower_model
 from stagecraft.context import CompileContext
 from stagecraft.errors import CompileError
-from stagecraft.spec import HANDLER_FIELDS, Block, Param, Pipeline, Stage, is_plain
+from stagecraft.spec import HANDLER_FIELDS, Block, Param, Pipeline, Stage
 
 ENTRYPOINT = "main"
 EXIT_HANDLER = "on-exit"
@@ -61,8 +60,7 @@ def compile_pipeline(pipeline: Pipeline, ctx: CompileContext) -> WorkflowTemplat
     entrypoint DAG. Stage N depends on stage N-1, one edge per stage. Stage and block handlers run
     from task `exit` hooks, pipeline handlers from the workflow's `onExit`. Commit statuses are
     report tasks around each step and in those exit handlers. Helm values come from `ctx`, which
-    validates every reference against the chart's values contract. A workspace is a volume claim
-    per run, shared according to the pipeline's workspace strategy.
+    validates every reference against the chart's values contract.
     """
     lowering = _Lowering({p.name for p in pipeline.params}, ctx)
     templates = []
@@ -92,19 +90,12 @@ def compile_pipeline(pipeline: Pipeline, ctx: CompileContext) -> WorkflowTemplat
     templates += exit_handler
     _check_unique_template_names(pipeline, templates)
 
-    volumes = {}
-    if pipeline.workspace:
-        volumes = {
-            "volume_claim_templates": [workspace.claim(pipeline.workspace)],
-            "volume_claim_gc": workspace.CLAIM_GC,
-        }
     return WorkflowTemplate(
         name=pipeline.name,
         entrypoint=ENTRYPOINT,
         on_exit=EXIT_HANDLER if exit_handler else None,
         arguments=[_compile_param(p) for p in pipeline.params],
         templates=templates,
-        **volumes,
     )
 
 
@@ -150,24 +141,10 @@ def _compile_param(param: Param) -> Parameter:
 def _compile_stage(pipeline: Pipeline, stage: Stage, lowering: _Lowering):
     tasks = []
     templates = []
-    group = workspace.grouped(pipeline, stage)
     for block in stage.blocks:
         name = f"{stage.name}-{block.block_name}"
         where = f"pipeline {pipeline.name!r}, stage {stage.name!r}, block {block.block_name!r}"
-        if group and block.block_name == workspace.GROUP:
-            raise CompileError(
-                f"{where}: block name {workspace.GROUP!r} is reserved in stages whose workspace "
-                "blocks share a containerset pod"
-            )
-        if block in group:
-            if block is group[0]:
-                container_set = _compile_group(pipeline, stage, group, lowering)
-                templates.append(container_set)
-                tasks.append(Task(name=workspace.GROUP, template=container_set))
-            continue
         template = _compile_block(block, name=name, lowering=lowering, where=where)
-        if block.workspace != "none":
-            template = workspace.mount(template, block.workspace)
         hooks, hook_templates = _compile_exit_hook(
             block,
             task=block.block_name,
@@ -189,29 +166,6 @@ def _compile_stage(pipeline: Pipeline, stage: Stage, lowering: _Lowering):
             )
         )
     return DAG(name=stage.name, tasks=tasks), templates
-
-
-def _compile_group(
-    pipeline: Pipeline, stage: Stage, blocks: list[Block], lowering: _Lowering
-) -> ContainerSet:
-    """The containerSet running a stage's workspace blocks in one pod, one container each.
-
-    Argo has no per-container `when` or hooks, so these blocks cannot set step features.
-    """
-    nodes = []
-    for block in blocks:
-        where = f"pipeline {pipeline.name!r}, stage {stage.name!r}, block {block.block_name!r}"
-        if not is_plain(block):
-            raise CompileError(
-                f"{where}: blocks sharing a containerset pod cannot set when, status, or "
-                "handlers; set them on the stage, or move the block to its own stage"
-            )
-        template = _compile_block(block, name=block.block_name, lowering=lowering, where=where)
-        try:
-            nodes.append(workspace.container_node(template, block.block_name))
-        except CompileError as e:
-            raise CompileError(f"{where}: {e}") from e
-    return workspace.container_set(f"{stage.name}-{workspace.GROUP}", nodes)
 
 
 def _compile_exit_hook(step: Block | Stage, task: str, path: str, lowering: _Lowering, where: str):

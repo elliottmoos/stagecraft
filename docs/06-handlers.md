@@ -218,7 +218,7 @@ notify:
 ## Rules for handler blocks
 
 A handler only runs; it can't be a step of its own. So a handler block can't set `when`,
-`status`, its own handlers, or `workspace` access. Handler names must be unique within each list
+`status`, or its own handlers. Handler names must be unique within each list
 (`on_failure=[Notify(...), Notify(name="page", ...)]`).
 
 ## Recap

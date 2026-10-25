@@ -282,11 +282,9 @@ pipeline's own).
 
 - Statuses need a `status_reporter` and required `repo` and `sha` params; the render fails
   without them.
-- The reporter is a plain block: no `when`, `status`, handlers, workspace access, or template
-  inputs of its own.
+- The reporter is a plain block: no `when`, `status`, handlers, or template inputs of its own.
 - If a run is terminated (`argo terminate`), or stopped while a block with a status is running
   (`argo stop`), that context can stay `pending`. Re-running the workflow updates it.
-- A block can't have its own status when it shares a pod with other blocks; chapter 8 explains.
 
 ## Recap
 
@@ -295,4 +293,4 @@ pipeline's own).
   pipeline's context.
 - Your `status_reporter` block makes the API call; reporting never fails the build.
 
-Next: [8. The workspace](08-workspace.md).
+Next: [8. Triggers](08-triggers.md).

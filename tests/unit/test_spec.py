@@ -73,3 +73,11 @@ def test_pipeline_needs_a_stage():
 def test_names_must_be_dns_labels(name):
     with pytest.raises(ValidationError, match="lowercase"):
         Stage(name, [Shell(script="a")])
+
+
+def test_there_is_no_shared_workspace():
+    # Files cross job boundaries only as artifacts (DESIGN.md section 16).
+    with pytest.raises(ValidationError, match="workspace"):
+        Shell(script="true", workspace="read")
+    with pytest.raises(ValidationError, match="workspace"):
+        Pipeline(name="p", stages=[Stage("s", [Shell(script="true")])], workspace={})

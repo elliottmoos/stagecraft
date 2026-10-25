@@ -2,7 +2,7 @@
 
 This guide takes you from nothing to designing your own pipelines. Each chapter adds one layer
 on top of the previous ones, and all of them build the same project: a CI pipeline called
-`service-ci` that checks out a service, lints and tests it, builds an image, optionally deploys
+`service-ci` that lints and tests a service, builds an image, optionally deploys
 it, reports GitHub checks, and runs nightly.
 
 Read it in order the first time. Afterwards, the [reference](reference.md) has everything on one
@@ -19,10 +19,9 @@ page.
 | [5. Stages, params, and conditions](05-stages-and-flow.md) | How stages run, per-run params, `when` conditions | 4 |
 | [6. Handlers](06-handlers.md) | `on_success`, `on_failure`, and `finally_` on blocks, stages, and the pipeline | 5 |
 | [7. Commit statuses](07-commit-statuses.md) | GitHub checks for the pipeline and its steps, through your own reporter block | 6 |
-| [8. The workspace](08-workspace.md) | Sharing a checkout between steps, and the `containerset` strategy's rules | 7 |
-| [9. Triggers](09-triggers.md) | Running pipelines on a schedule | 8 |
-| [10. Shipping pipelines](10-shipping.md) | Rendering into a chart, and the checks on both sides | 9 |
-| [11. Designing pipelines](11-designing-pipelines.md) | The finished pipeline; exactly what you can customize; patterns; troubleshooting | all |
+| [8. Triggers](08-triggers.md) | Running pipelines on a schedule | 7 |
+| [9. Shipping pipelines](09-shipping.md) | Rendering into a chart, and the checks on both sides | 8 |
+| [10. Designing pipelines](10-designing-pipelines.md) | The finished pipeline; exactly what you can customize; patterns; troubleshooting | all |
 
 ## Before you start
 
