@@ -1,12 +1,12 @@
-"""Minimal blocks for tests. Stand-ins for whatever blocks a consumer defines."""
+"""Minimal actions for tests. Stand-ins for whatever actions a consumer defines."""
 
 from hera.workflows import Container
 
 from stagecraft.context import CompileContext
-from stagecraft.spec import Block
+from stagecraft.spec import Action
 
 
-class Shell(Block):
+class Shell(Action):
     """Runs a shell script. The image comes from the chart's `images.shell` value."""
 
     script: str

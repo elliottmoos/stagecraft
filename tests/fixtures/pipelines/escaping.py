@@ -1,9 +1,9 @@
 """Argo expressions and Helm values in awkward places, to prove `helm template` renders them
 exactly. strings.tricky holds characters that break YAML if spliced in unescaped."""
 
-from stagecraft.spec import Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 
 SCRIPT = """\
 set -eu
@@ -29,10 +29,10 @@ pipeline = Pipeline(
         Stage(
             "only",
             [
-                Shell(name="exprs", script=SCRIPT),
-                Shell(name="values", script=VALUES_SCRIPT),
-                Shell(name="whole", script="{{ values.strings.tricky }}"),
-                Shell(name="whole-number", script="{{ values.strings.big }}"),
+                Step("exprs", Shell(script=SCRIPT)),
+                Step("values", Shell(script=VALUES_SCRIPT)),
+                Step("whole", Shell(script="{{ values.strings.tricky }}")),
+                Step("whole-number", Shell(script="{{ values.strings.big }}")),
             ],
         )
     ],

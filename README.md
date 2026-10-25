@@ -1,7 +1,7 @@
 # Stagecraft
 
 Stagecraft compiles CI/CD pipelines, written in Python as ordered **stages** of parallel
-**blocks**, into Argo Workflows `WorkflowTemplate` (and, for schedules, `CronWorkflow`)
+**steps**, into Argo Workflows `WorkflowTemplate` (and, for schedules, `CronWorkflow`)
 manifests that a Helm chart can ship. You keep
 triggering and watching runs in the Argo Workflows UI; Stagecraft only writes templates.
 
@@ -14,18 +14,18 @@ pipelines (Python) ──stagecraft render──▶ chart/templates/*.yaml ─�
 Pinned targets: Hera 7.1.0, Argo Workflows 4.1.6, Helm 4, Python 3.12+. The design rationale is in
 [DESIGN.md](DESIGN.md).
 
-**New to Stagecraft? Start with the guide in [docs/](docs/README.md)**: eleven short chapters
+**New to Stagecraft? Start with the guide in [docs/](docs/README.md)**: ten short chapters
 that build one pipeline from scratch, layer by layer. This page is the quick overview.
 
 ## A pipelines repo
 
 A pipelines repo is a plain Python project that depends on a pinned stagecraft release and holds
-your blocks and pipeline files:
+your actions and pipeline files:
 
 ```
 pipelines/
   pyproject.toml        # dependencies = ["stagecraft==0.0.1"]
-  blocks.py             # your blocks
+  actions.py            # your actions
   pipelines/
     service_ci.py       # one or more Pipeline objects at module level
 ```
@@ -37,22 +37,23 @@ uv run stagecraft render pipelines --values-schema ../chart/values.schema.json \
   --out ../chart/templates/pipelines
 ```
 
-Run the CLI from the repo root: pipeline files import your blocks relative to the working
+Run the CLI from the repo root: pipeline files import your actions relative to the working
 directory.
 
-## Blocks
+## Actions
 
-A block is a Pydantic model with a `compile` method that returns one Hera `Container` (or
-`Script`). Stagecraft names the template and wires it into the workflow.
+An action is reusable work: a Pydantic model with a `compile` method that returns one Hera
+`Container` (or `Script`). Stagecraft names the template and wires it into the workflow. Actions
+have only the fields you give them; where and when they run is up to the steps that place them.
 
 ```python
 from hera.workflows import Container, Env, SecretEnv
 
 from stagecraft.context import CompileContext
-from stagecraft.spec import Block
+from stagecraft.spec import Action
 
 
-class Shell(Block):
+class Shell(Action):
     """Runs a shell script in the chart's shell image."""
 
     script: str
@@ -65,7 +66,7 @@ class Shell(Block):
         )
 
 
-class GitHubStatus(Block):
+class GitHubStatus(Action):
     """Posts a commit status. Used as a pipeline's status_reporter."""
 
     repo: str = "{{ param.repo }}"
@@ -96,25 +97,30 @@ class GitHubStatus(Block):
         )
 ```
 
-Rules for blocks:
+Rules for actions:
 
 - **Helm values only through `ctx.value(path, type)`**, where `type` is `str`, `int`, `float`, or
   `bool`. It returns a placeholder string that renders as a Helm expression, and fails the render
   if the chart's schema doesn't guarantee that value. Never write Helm syntax yourself.
-- **Placeholders are lowered in a block's fields, before `compile` runs**, not in what `compile`
-  returns. Give a block a field (with a default, as `GitHubStatus` does) for anything that needs
+- **Placeholders are lowered in an action's fields, before `compile` runs**, not in what
+  `compile` returns. Give an action a field (with a default, as `GitHubStatus` does) for anything that needs
   `{{ param.x }}`, `{{ step.x }}`, or `{{ status.x }}`.
 - **Secrets by name, never by content**: take the Secret's name from a value, as `SecretEnv` above
   does.
-- A block's name defaults to its class name in kebab case (`GitHubStatus` → `git-hub-status`).
-  Pass `name=` to tell apart two blocks of the same type in one stage.
+
+## Steps
+
+`Step(name, action, ...)` places an action in a stage under a name, with an optional `when`,
+`status`, and handlers. A bare action in a stage (or handler list) is a step named after its class
+in kebab case (`GitHubStatus` → `git-hub-status`), so two actions of the same class in one stage
+need a `Step` each.
 
 ## Pipelines
 
 ```python
-from stagecraft.spec import Param, Pipeline, Stage, Trigger
+from stagecraft.spec import Param, Pipeline, Stage, Step, Trigger
 
-from blocks import GitHubStatus, Shell
+from actions import GitHubStatus, Shell
 
 pipeline = Pipeline(
     name="service-ci",
@@ -129,40 +135,40 @@ pipeline = Pipeline(
         Stage(
             "verify",
             [
-                Shell(name="lint", script="make lint"),
-                Shell(name="unit-tests", script="make test"),
+                Step("lint", Shell(script="make lint")),
+                Step("unit-tests", Shell(script="make test")),
             ],
             status="ci/verify",
             on_failure=[
-                Shell(name="alert", script="echo '{{ step.name }} failed' # to {{ values.notify.channel }}"),
+                Step("alert", Shell(script="echo '{{ step.name }} failed' # to {{ values.notify.channel }}")),
             ],
         ),
         Stage(
             "deploy",
-            [Shell(name="staging", script="make deploy")],
+            [Step("staging", Shell(script="make deploy"))],
             when="{{ param.deploy }} == 'true'",
             status="ci/deploy",
         ),
     ],
-    on_failure=[Shell(name="report", script="echo '{{ step.name }} ended {{ step.status }}'")],
+    on_failure=[Step("report", Shell(script="echo '{{ step.name }} {{ step.outcome }}'"))],
     triggers=[
         Trigger.cron("0 2 * * *", name="nightly", params={"repo": "example/service", "sha": "main"}),
     ],
 )
 ```
 
-- **Stages run in order; the blocks in a stage run in parallel.** A failing block fails its stage
-  and the pipeline, and later stages don't run. Each block runs in its own pod, and no files are
-  shared between blocks yet.
+- **Stages run in order; the steps in a stage run in parallel.** A failing step fails its stage
+  and the pipeline, and later stages don't run. Each step runs in its own pod, and no files are
+  shared between steps yet.
 - **Params** become the Argo UI's submit form (descriptions, enums, defaults).
-- **`when`** (stage or block) skips the step when false. Inside it, `{{ param.x }}` is a quoted
+- **`when`** (stage or step) skips it when false. Inside it, `{{ param.x }}` is a quoted
   string, so compare with quoted values: `"{{ param.deploy }} == 'true'"`.
-- **Handlers**: `on_success`, `on_failure`, and `finally_` blocks run after a stage, a block, or
+- **Handlers**: `on_success`, `on_failure`, and `finally_` actions run after a stage, a step, or
   (`on_success`/`on_failure` only) the whole pipeline finishes. Handlers can't have their own
   `when`, status, or handlers. A failing pipeline handler fails the pipeline; a
-  failing stage or block handler shows as failed but doesn't (an Argo limitation). A step skipped
+  failing stage or step handler shows as failed but doesn't (an Argo limitation). A step skipped
   by `when` runs no handlers.
-- **Commit statuses**: `status="<context>"` on the pipeline, a stage, or a block reports pending,
+- **Commit statuses**: `status="<context>"` on the pipeline, a stage, or a step reports pending,
   then success, failure, or error, through `status_reporter`. A step skipped by `when` reports
   success with the description "Skipped", so a required check doesn't hang. Reporting is
   best-effort and never fails the build. Statuses need required `repo` and `sha` params.
@@ -171,9 +177,9 @@ pipeline = Pipeline(
 
 | Placeholder | Where | Becomes |
 |---|---|---|
-| `{{ param.x }}` | any block field, `when` | the workflow parameter |
-| `{{ values.a.b }}` | any block field, `when` | the chart value `.Values.a.b`, checked against the schema |
-| `{{ step.name }}`, `{{ step.status }}` | handler blocks | the step's path (`stage` or `stage/block`) and `Succeeded` or `Failed`; the workflow's name and status in pipeline handlers |
+| `{{ param.x }}` | any action field, `when` | the workflow parameter |
+| `{{ values.a.b }}` | any action field, `when` | the chart value `.Values.a.b`, checked against the schema |
+| `{{ step.name }}`, `{{ step.outcome }}` | handlers | the path (`stage` or `stage/step`), or the workflow's name in pipeline handlers; and the outcome, `succeeded` or `failed` |
 | `{{ status.context }}`, `{{ status.state }}`, `{{ status.description }}` | the `status_reporter` | the report being posted; state is `pending`, `success`, `failure`, or `error` |
 
 Other `{{ ... }}` text, such as native Argo expressions (`{{workflow.name}}`), passes through to
@@ -208,7 +214,7 @@ reference (from `ctx.value` or a `{{ values.a.b }}` placeholder) must be:
   `patternProperties`, and `dependentSchemas` are rejected rather than guessed at);
 - keyed by identifiers, so it works as `.Values.a.b`.
 
-Anything else fails the render, naming the pipeline, stage, block, and path. If the chart nests
+Anything else fails the render, naming the pipeline, stage, step, and path. If the chart nests
 these values under a key, pass `--values-prefix <key>`. Values always render as strings in the
 manifest.
 
@@ -218,7 +224,7 @@ manifest.
 |---|---|
 | `stagecraft render <paths> --values-schema <file> --out <dir>` | Compile and validate every pipeline, then write `<pipeline>.yaml` for each (its WorkflowTemplate, then a CronWorkflow per trigger). Writes nothing if any pipeline fails. |
 | `stagecraft check <paths> --values-schema <file>` | The same validation, without writing. For CI. |
-| `stagecraft graph <paths> [--pipeline <name>]` | Print a Mermaid diagram of a pipeline: stages, blocks, conditions, statuses, handlers. |
+| `stagecraft graph <paths> [--pipeline <name>]` | Print a Mermaid diagram of a pipeline: stages, steps, conditions, statuses, handlers. |
 | `stagecraft contexts <paths>` | Print each status context as `<pipeline><TAB><context>`: the checks branch protection can require. |
 | `stagecraft version` | Print the stagecraft and Hera versions. |
 
@@ -239,7 +245,7 @@ kubeconform -strict rendered.yaml   # with schemas for the Argo CRDs
 
 ## Known gaps
 
-- **Not built yet**: sharing files between blocks (framework-managed sources, and artifacts
+- **Not built yet**: sharing files between steps (framework-managed sources, and artifacts
   passed between jobs; DESIGN.md section 16) and structured (object or array) values.
 - **Right after an install that creates a trigger**, its first ticks can be missed: Helm applies
   the CronWorkflow before the WorkflowTemplate it references, and Argo re-checks the cron only
@@ -248,8 +254,8 @@ kubeconform -strict rendered.yaml   # with schemas for the Argo CRDs
   latest commit for `sha`, so a commit status for a scheduled run may fail to post (reporting is
   best-effort).
 - A trigger can't be switched off per installation yet (no `suspend` from Helm values).
-- `argo terminate` runs no exit handlers, and `argo stop` skips the exit hook of a running block,
+- `argo terminate` runs no exit handlers, and `argo stop` skips the exit hook of a running step,
   so either can leave a commit status pending. Re-running the workflow updates it.
-- Stage and block handlers see Argo's Error as `Failed`, and get no exit code or message.
+- Handlers see Argo's Error as `failed`, and get no exit code or message.
 - A multi-line script containing a string value renders as one double-quoted line: correct, but
   harder to read in the chart's diffs.

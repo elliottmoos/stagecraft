@@ -3,15 +3,18 @@
 Before writing any code, it helps to know what Stagecraft is, what it isn't, and where each
 piece of a pipeline lives. Everything later in this guide builds on the ideas here.
 
-## Pipelines, stages, and blocks
+## Pipelines, stages, steps, and actions
 
 A **pipeline** is a CI/CD process: "check out the code, lint and test it, build an image, maybe
-deploy it." Stagecraft describes it with three nested ideas:
+deploy it." Stagecraft describes it with four ideas:
 
 - A **pipeline** is an ordered list of **stages**.
-- A **stage** is a set of **blocks** that run **in parallel**. The next stage starts only when
-  every block in this one has succeeded.
-- A **block** is one unit of work: one container that runs one command.
+- A **stage** is a set of **steps** that run **in parallel**. The next stage starts only when
+  every step in this one has succeeded.
+- A **step** places an **action** in a stage under a name, and says when it runs and what
+  happens around it: a condition, a GitHub check, handlers.
+- An **action** is reusable work: one container that runs one command, such as "run this make
+  target".
 
 ```mermaid
 flowchart LR
@@ -29,9 +32,13 @@ flowchart LR
   s1 --> s2
 ```
 
-Pipelines and stages are things you **configure**. Blocks are things you **write**: a block is a
-small Python class that you (or a block library) define, and it is the main way you extend
-Stagecraft.
+Pipelines, stages, and steps are things you **configure**. Actions are things you **write**: an
+action is a small Python class that you (or an action library) define, and it is the main way you
+extend Stagecraft. The same action can be placed by many steps, in many pipelines.
+
+The split often matches two roles, even when one person plays both: **pipeline authors** arrange
+steps and need only Stagecraft's vocabulary, and **action authors** write the containers behind
+them.
 
 ## Four moments in a pipeline's life
 
@@ -40,7 +47,7 @@ Stagecraft's rules.
 
 | Moment | What happens | Who does it |
 |---|---|---|
-| **Author time** | You write blocks and pipelines in Python. | You, in a pipelines repo |
+| **Author time** | You write actions and pipelines in Python. | You, in a pipelines repo |
 | **Render time** | `stagecraft render` compiles each pipeline into an Argo Workflows `WorkflowTemplate` (plus a `CronWorkflow` per schedule) and checks every Helm value it uses against the chart's contract. | Stagecraft |
 | **Install time** | Helm fills in the values for one environment and installs the templates into a cluster. | Helm, from a chart repo |
 | **Run time** | Someone submits the template in the Argo UI (or a schedule fires), and Argo runs it. | Argo Workflows |
@@ -59,13 +66,13 @@ Two consequences:
 
 ```mermaid
 flowchart LR
-  P["pipelines repo<br/>blocks + pipelines (Python)"] -- stagecraft render --> T["chart/templates/*.yaml"]
+  P["pipelines repo<br/>actions + pipelines (Python)"] -- stagecraft render --> T["chart/templates/*.yaml"]
   S["chart repo<br/>values.schema.json"] -. the contract .-> P
   T --> H["helm install<br/>(per environment values)"]
   H --> A["Argo Workflows"]
 ```
 
-- The **pipelines repo** holds your blocks and pipeline files. It is a plain Python project.
+- The **pipelines repo** holds your actions and pipeline files. It is a plain Python project.
 - The **chart repo** holds a Helm chart that installs the rendered templates. It owns
   `values.yaml` and `values.schema.json`.
 - The chart's **`values.schema.json` is the contract** between the two. A pipeline may only use a
@@ -77,24 +84,25 @@ Stagecraft never writes `Chart.yaml`, `values.yaml`, or the schema. It only writ
 
 | You write (code) | You configure (data) | Fixed by Stagecraft |
 |---|---|---|
-| Block classes: their fields and the container they compile to | Pipelines, stages, params, conditions, handlers, statuses, triggers | How stages become an Argo DAG, how handlers and statuses are wired, how Helm values are rendered and escaped |
+| Action classes: their fields and the container they compile to | Pipelines, stages, steps, params, conditions, handlers, statuses, triggers | How stages become an Argo DAG, how handlers and statuses are wired, how Helm values are rendered and escaped |
 
-Chapter 10 maps this out in detail. For now, the short version: **blocks are open, the pipeline
-structure is closed.** You can make a block do anything a container can do, and you combine
-blocks with a small, fixed vocabulary.
+Chapter 10 maps this out in detail. For now, the short version: **actions are open, the pipeline
+structure is closed.** You can make an action do anything a container can do, and you combine
+actions with a small, fixed vocabulary.
 
 ## Vocabulary
 
 | Term | Meaning |
 |---|---|
-| Block | A Python class that compiles to one container. One unit of work. |
-| Stage | Blocks that run in parallel. |
+| Action | A Python class that compiles to one container. Reusable work. |
+| Step | An action placed in a stage under a name, with optional condition, check, and handlers. |
+| Stage | Steps that run in parallel. |
 | Pipeline | Ordered stages, plus params, handlers, statuses, and triggers. |
 | Param | A per-run input, shown in the Argo UI's submit form. |
 | Helm value | A per-installation input from the chart's values. |
 | Values contract | The chart's `values.schema.json`. |
-| Placeholder | `{{ param.x }}`, `{{ values.a.b }}`, `{{ step.x }}`, or `{{ status.x }}` in a block's fields. |
-| Handler | A block that runs after a step finishes (`on_success`, `on_failure`, `finally_`). |
-| Step | A stage or a block: anything that can have a condition, handlers, or a status. |
+| Placeholder | `{{ param.x }}`, `{{ values.a.b }}`, `{{ step.x }}`, or `{{ status.x }}` in an action's fields. |
+| Handler | A step that runs after a stage, step, or pipeline finishes (`on_success`, `on_failure`, `finally_`). |
+| Outcome | How a step, stage, or run ended: `succeeded`, `failed`, or `skipped`. |
 
 Next: [2. Your first pipeline](02-first-pipeline.md), where you render one.

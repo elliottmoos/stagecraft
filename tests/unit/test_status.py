@@ -3,9 +3,9 @@ from pydantic import ValidationError
 
 from stagecraft.compile import compile_pipeline
 from stagecraft.errors import CompileError
-from stagecraft.spec import Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 from fixtures.contract import CONTEXT
 from fixtures.pipelines import status
 
@@ -123,7 +123,7 @@ def test_final_status_is_reported_from_the_exit_hook_by_outcome():
     }
 
 
-def test_block_status_reports_pending_inside_the_stage_dag():
+def test_step_status_reports_pending_inside_the_stage_dag():
     verify = tasks(manifest(status.pipeline), "verify")
 
     assert report_args(verify["unit-tests-status-pending"])["context"] == "ci/unit-tests"
@@ -154,7 +154,7 @@ def test_pipelines_without_statuses_are_unchanged():
 def test_status_placeholders_are_rejected_outside_the_reporter():
     pipeline = Pipeline(name="p", stages=[Stage("s", [Shell(script="{{ status.state }}")])])
 
-    with pytest.raises(CompileError, match="only available in the status_reporter block"):
+    with pytest.raises(CompileError, match="only available in the status_reporter"):
         compile_pipeline(pipeline, CONTEXT)
 
 
@@ -185,6 +185,10 @@ def test_statuses_need_required_repo_and_sha_params():
         )
 
 
-def test_handler_blocks_cannot_report_status():
-    with pytest.raises(ValidationError, match="handler blocks cannot set when, status, or"):
-        Stage("s", [Shell(script="true")], finally_=[Shell(script="true", status="ci/x")])
+def test_handler_steps_cannot_report_status():
+    with pytest.raises(ValidationError, match="handler steps cannot set when, status, or"):
+        Stage(
+            "s",
+            [Shell(script="true")],
+            finally_=[Step("shell", Shell(script="true"), status="ci/x")],
+        )

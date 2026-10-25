@@ -1,6 +1,6 @@
-from stagecraft.spec import Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 
 pipeline = Pipeline(
     name="smoke-ci",
@@ -9,14 +9,14 @@ pipeline = Pipeline(
         Param("push", default="false", enum=["true", "false"], description="Push the image"),
     ],
     stages=[
-        Stage("prepare", [Shell(name="clone", script="echo cloning {{ param.repo }}")]),
+        Stage("prepare", [Step("clone", Shell(script="echo cloning {{ param.repo }}"))]),
         Stage(
             "verify",
             [
-                Shell(name="lint", script="echo lint; sleep 2"),
-                Shell(name="unit-tests", script="echo unit tests; sleep 2"),
+                Step("lint", Shell(script="echo lint; sleep 2")),
+                Step("unit-tests", Shell(script="echo unit tests; sleep 2")),
             ],
         ),
-        Stage("package", [Shell(name="build", script='echo "build, push={{ param.push }}"')]),
+        Stage("package", [Step("build", Shell(script='echo "build, push={{ param.push }}"'))]),
     ],
 )

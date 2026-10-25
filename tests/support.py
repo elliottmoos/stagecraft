@@ -81,7 +81,7 @@ def with_fixture_values(node):
 
 
 def nodes_by_name(workflow: dict) -> dict[str, dict]:
-    """Workflow nodes keyed by display name (stage or block name)."""
+    """Workflow nodes keyed by display name (stage or step name)."""
     return {n["displayName"]: n for n in workflow["status"]["nodes"].values()}
 
 

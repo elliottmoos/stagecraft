@@ -1,11 +1,11 @@
-"""Block and stage handlers on a real controller. Handlers in the fixture pipeline fail unless they
+"""Step and stage handlers on a real controller. Handlers in the fixture pipeline fail unless they
 see the expected step name and status, so every hook below must have Succeeded."""
 
 import pytest
 
-from stagecraft.spec import Pipeline, Stage
+from stagecraft.spec import Pipeline, Stage, Step
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 from fixtures.pipelines import hooks
 from support import nodes_by_name, unique_name
 
@@ -28,7 +28,7 @@ def fired_hooks(workflow: dict) -> dict[str, str]:
     return fired
 
 
-def test_failure_runs_failure_and_finally_handlers_for_block_and_stage(argo):
+def test_failure_runs_failure_and_finally_handlers_for_step_and_stage(argo):
     workflow = argo.run(hooks.pipeline, {"fail": "true"})
 
     assert workflow["status"]["phase"] == "Failed"
@@ -69,7 +69,11 @@ def test_failing_step_handler_does_not_fail_the_pipeline(argo):
         stages=[
             Stage(
                 "run",
-                [Shell(name="work", script="true", on_success=[Shell(name="n", script="exit 1")])],
+                [
+                    Step(
+                        "work", Shell(script="true"), on_success=[Step("n", Shell(script="exit 1"))]
+                    )
+                ],
             )
         ],
     )

@@ -1,29 +1,33 @@
-"""Pipeline-level on_success / on_failure. Each handler fails unless it sees the status it expects,
+"""Pipeline-level on_success / on_failure. Each handler fails unless it sees the outcome it expects,
 so a passing handler proves it received the right context."""
 
-from stagecraft.spec import Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 
 
-def notify(expect: str) -> Shell:
-    """A handler that echoes its context and fails unless `test "<status>" <expect>` holds."""
-    script = 'echo "{{ step.name }}: {{ step.status }}"; test "{{ step.status }}" ' + expect
-    return Shell(name="notify", script=script)
+def notify(outcome: str) -> Step:
+    """A handler that echoes its context and fails unless it sees `outcome`."""
+    script = 'echo "{{ step.name }}: {{ step.outcome }}"; test "{{ step.outcome }}" = ' + outcome
+    return Step("notify", Shell(script=script))
 
 
 pipeline = Pipeline(
     name="handlers-ci",
     params=[
         Param("fail", default="false", enum=["true", "false"]),
-        Param("sleep", default="0", description="Seconds the build block sleeps"),
+        Param("sleep", default="0", description="Seconds the build step sleeps"),
     ],
     stages=[
         Stage(
             "build",
-            [Shell(name="work", script='sleep {{ param.sleep }}; test "{{ param.fail }}" != true')],
+            [
+                Step(
+                    "work", Shell(script='sleep {{ param.sleep }}; test "{{ param.fail }}" != true')
+                )
+            ],
         )
     ],
-    on_success=[notify("= Succeeded")],
-    on_failure=[notify("!= Succeeded")],
+    on_success=[notify("succeeded")],
+    on_failure=[notify("failed")],
 )

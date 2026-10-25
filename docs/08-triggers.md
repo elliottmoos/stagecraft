@@ -34,9 +34,9 @@ fails otherwise.
 A nightly build of `main`:
 
 ```python file=pipelines/service_ci.py
-from stagecraft.spec import Param, Pipeline, Stage, Trigger
+from stagecraft.spec import Param, Pipeline, Stage, Step, Trigger
 
-from blocks import GitHubStatus, Make, Notify, Shell
+from actions import GitHubStatus, Make, Notify, Shell
 
 pipeline = Pipeline(
     name="service-ci",
@@ -49,29 +49,29 @@ pipeline = Pipeline(
     status="ci/pipeline",
     status_reporter=GitHubStatus(),
     stages=[
-        Stage("prepare", [Shell(name="fetch", script="echo fetching {{ param.repo }}")]),
+        Stage("prepare", [Step("fetch", Shell(script="echo fetching {{ param.repo }}"))]),
         Stage(
             "verify",
             [
-                Make(name="lint", target="lint"),
-                Make(name="unit-tests", target="test"),
+                Step("lint", Make(target="lint")),
+                Step("unit-tests", Make(target="test")),
             ],
             status="ci/verify",
             on_failure=[Notify(message="{{ step.name }} failed for {{ param.sha }}")],
         ),
         Stage(
             "package",
-            [Make(name="image", target="image", variables={"PUSH": "{{ param.push }}"})],
+            [Step("image", Make(target="image", variables={"PUSH": "{{ param.push }}"}))],
             status="ci/package",
         ),
         Stage(
             "deploy",
-            [Make(name="staging", target="deploy-staging")],
+            [Step("staging", Make(target="deploy-staging"))],
             when="{{ param.deploy }} == 'true'",
             status="ci/deploy",
         ),
     ],
-    on_failure=[Notify(message="{{ step.name }} ended {{ step.status }}")],
+    on_failure=[Notify(message="{{ step.name }} {{ step.outcome }}")],
     triggers=[
         Trigger.cron(
             "0 2 * * *",

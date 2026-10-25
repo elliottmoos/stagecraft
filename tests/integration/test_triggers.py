@@ -4,21 +4,23 @@ import time
 
 import pytest
 
-from stagecraft.spec import Param, Pipeline, Stage, Trigger
+from stagecraft.spec import Param, Pipeline, Stage, Step, Trigger
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 from support import unique_name
 
 pytestmark = pytest.mark.integration
 
 
 def test_a_cron_trigger_runs_the_pipeline_with_its_params(argo):
-    # The block fails unless the scheduled run got the trigger's param, not the default.
+    # The step fails unless the scheduled run got the trigger's param, not the default.
     name = unique_name("cron")
     pipeline = Pipeline(
         name=name,
         params=[Param("mode", default="manual")],
-        stages=[Stage("check", [Shell(name="mode", script='test "{{ param.mode }}" = scheduled')])],
+        stages=[
+            Stage("check", [Step("mode", Shell(script='test "{{ param.mode }}" = scheduled'))])
+        ],
         triggers=[Trigger.cron("* * * * *", params={"mode": "scheduled"})],
     )
     # Install the template before the trigger. Installed together, Helm applies the CronWorkflow

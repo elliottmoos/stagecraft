@@ -1,6 +1,6 @@
 # 2. Your first pipeline
 
-In this chapter you set up a pipelines repo, write one block and one pipeline, and render it.
+In this chapter you set up a pipelines repo, write one action and one pipeline, and render it.
 The pipeline you start here, `service-ci`, grows through the rest of the guide.
 
 ## The project
@@ -10,11 +10,11 @@ A pipelines repo is a plain Python project. Through this guide it will look like
 ```
 pipelines-repo/
   pyproject.toml
-  blocks.py               # your blocks
+  actions.py              # your actions
   pipelines/
     service_ci.py         # pipeline files: Pipeline objects at module level
   tests/
-    test_blocks.py        # tests for your blocks
+    test_actions.py       # tests for your actions
   chart/                  # stands in for the chart repo
     Chart.yaml
     values.yaml
@@ -35,18 +35,18 @@ dependencies = ["stagecraft==0.0.1"]
 Pin stagecraft exactly. A new release can change what it renders, and you want that change to
 show up as a reviewed diff, not a surprise.
 
-## A first block
+## A first action
 
-Blocks are Python classes. This one runs a shell script:
+Actions are Python classes. This one runs a shell script:
 
-```python file=blocks.py
+```python file=actions.py
 from hera.workflows import Container
 
 from stagecraft.context import CompileContext
-from stagecraft.spec import Block
+from stagecraft.spec import Action
 
 
-class Shell(Block):
+class Shell(Action):
     """Runs a shell script in the chart's shell image."""
 
     script: str
@@ -61,8 +61,8 @@ class Shell(Block):
 
 Three things to notice:
 
-- `script: str` is a **field**. Blocks are Pydantic models, so fields are typed and validated.
-- `compile` returns a Hera `Container`: the container this block runs as.
+- `script: str` is a **field**. Actions are Pydantic models, so fields are typed and validated.
+- `compile` returns a Hera `Container`: the container this action runs as.
 - The image comes from `ctx.value("images.shell", str)`, a **Helm value**, not a literal. Which
   image to use differs per installation, so it belongs to the chart. Chapter 4 explains values in
   depth.
@@ -70,9 +70,9 @@ Three things to notice:
 ## A first pipeline
 
 ```python file=pipelines/service_ci.py
-from stagecraft.spec import Pipeline, Stage
+from stagecraft.spec import Pipeline, Stage, Step
 
-from blocks import Shell
+from actions import Shell
 
 pipeline = Pipeline(
     name="service-ci",
@@ -80,21 +80,22 @@ pipeline = Pipeline(
         Stage(
             "verify",
             [
-                Shell(name="lint", script="echo linting"),
-                Shell(name="unit-tests", script="echo testing"),
+                Step("lint", Shell(script="echo linting")),
+                Step("unit-tests", Shell(script="echo testing")),
             ],
         ),
     ],
 )
 ```
 
-One stage, two blocks that run in parallel. Both blocks are `Shell`, so each gets a `name=` to
-tell them apart. Stagecraft finds the pipeline because it's a `Pipeline` object at module level;
+One stage, two steps that run in parallel. A `Step` gives an action a name in its stage. A bare
+action works too, and is named after its class (`Shell(...)` alone would be the step `shell`),
+but these two both use `Shell`, so each needs its own name. Stagecraft finds the pipeline because it's a `Pipeline` object at module level;
 the variable name doesn't matter.
 
 ## The chart's contract
 
-The block asked for `images.shell`, so the chart must guarantee it. These three files stand in
+The action asked for `images.shell`, so the chart must guarantee it. These three files stand in
 for the chart repo:
 
 ```yaml file=chart/Chart.yaml
@@ -127,7 +128,7 @@ images:
 
 ## Check, render, look
 
-From the repo root (pipeline files import `blocks` relative to the working directory):
+From the repo root (pipeline files import `actions` relative to the working directory):
 
 ```sh
 uv run stagecraft check pipelines --values-schema chart/values.schema.json
@@ -172,7 +173,7 @@ spec:
   # ... verify-unit-tests is the same with "echo testing"
 ```
 
-Each stage is a small DAG of its blocks, and the `main` DAG runs the stages in order. The image
+Each stage is a small DAG of its steps, and the `main` DAG runs the stages in order. The image
 is a Helm expression, `{{ .Values.images.shell | quote }}`: Helm fills it in at install time.
 Don't edit this file; change the pipeline and render again.
 
@@ -197,9 +198,9 @@ Or open the Argo UI, find `service-ci` under Workflow Templates, and submit it t
 
 ## Recap
 
-- A block is a Python class with fields and a `compile` method returning a container.
-- A pipeline is configuration: stages of blocks.
+- An action is a Python class with fields and a `compile` method returning a container.
+- A pipeline is configuration: stages of steps, each placing an action under a name.
 - Helm values (like the image) come from the chart, through its schema.
 - `check` validates, `render` writes, `graph` draws.
 
-Next: [3. Blocks](03-blocks.md), where you write blocks that are worth reusing.
+Next: [3. Actions](03-actions.md), where you write actions that are worth reusing.

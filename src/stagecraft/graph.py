@@ -1,12 +1,12 @@
 """Mermaid diagram of a pipeline, for reading its shape in review or docs.
 
-It shows the pipeline as authored (stages, blocks, conditions, statuses, handlers, triggers), not
+It shows the pipeline as authored (stages, steps, conditions, statuses, handlers, triggers), not
 the Argo templates it compiles to.
 """
 
 import json
 
-from stagecraft.spec import HANDLER_FIELDS, Block, Pipeline, Stage
+from stagecraft.spec import HANDLER_FIELDS, Pipeline, Stage, Step
 
 _HANDLER_LABELS = {"on_success": "on success", "on_failure": "on failure", "finally_": "finally"}
 
@@ -17,13 +17,13 @@ def mermaid(pipeline: Pipeline) -> str:
     lines = ["---", f"title: {json.dumps(title)}", "---", "flowchart LR"]
     for i, stage in enumerate(pipeline.stages):
         lines.append(f'  subgraph s{i}["{_label(stage.name, stage)}"]')
-        for j, block in enumerate(stage.blocks):
-            lines.append(f'    s{i}b{j}["{_label(block.block_name, block)}"]')
+        for j, step in enumerate(stage.steps):
+            lines.append(f'    s{i}b{j}["{_label(step.name, step)}"]')
         lines.append("  end")
     lines += [f"  s{i - 1} --> s{i}" for i in range(1, len(pipeline.stages))]
     for i, stage in enumerate(pipeline.stages):
-        for j, block in enumerate(stage.blocks):
-            lines += _handlers(f"s{i}b{j}", block, HANDLER_FIELDS)
+        for j, step in enumerate(stage.steps):
+            lines += _handlers(f"s{i}b{j}", step, HANDLER_FIELDS)
         lines += _handlers(f"s{i}", stage, HANDLER_FIELDS)
     last = f"s{len(pipeline.stages) - 1}"
     lines += _handlers(last, pipeline, ("on_success", "on_failure"), node="p", edge="pipeline ")
@@ -34,7 +34,7 @@ def mermaid(pipeline: Pipeline) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _label(name: str, step: Stage | Block) -> str:
+def _label(name: str, step: Stage | Step) -> str:
     parts = [name]
     if step.when:
         parts.append(f"when: {step.when}")
@@ -45,7 +45,7 @@ def _label(name: str, step: Stage | Block) -> str:
 
 def _handlers(
     owner_id: str,
-    owner: Pipeline | Stage | Block,
+    owner: Pipeline | Stage | Step,
     fields: tuple[str, ...],
     node: str | None = None,
     edge: str = "",
@@ -54,7 +54,7 @@ def _handlers(
     handlers = [(field, h) for field in fields for h in getattr(owner, field)]
     for k, (field, handler) in enumerate(handlers):
         handler_id = f"{node or owner_id + 'h'}{k}"
-        lines.append(f'  {handler_id}["{_escape(handler.block_name)}"]')
+        lines.append(f'  {handler_id}["{_escape(handler.name)}"]')
         lines.append(f"  {owner_id} -.->|{edge}{_HANDLER_LABELS[field]}| {handler_id}")
     return lines
 

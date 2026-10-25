@@ -53,63 +53,64 @@ Reading it from the left:
 Everything installation-specific (images, build resources, the channel, the token Secret's name)
 comes from the chart's values, checked against its schema at every render.
 
-Each block starts in its own empty container: Stagecraft doesn't share files between steps yet.
-Until it does, a block that needs the code fetches it itself. Framework-managed sources and files
+Each step starts in its own empty container: Stagecraft doesn't share files between steps yet.
+Until it does, an action that needs the code fetches it itself. Framework-managed sources and files
 passed between jobs are planned
-([DESIGN.md section 16](../DESIGN.md#16-concept-model-and-contracts-target-not-yet-built)).
+([DESIGN.md section 16](../DESIGN.md#16-concept-model-and-contracts)).
 
 ## What you can customize
 
 Stagecraft has one open extension point, a fixed vocabulary for composing it, and a few escape
 valves.
 
-### Open: blocks (code you write)
+### Open: actions (code you write)
 
 - **Fields**: any Pydantic fields, defaults, and validators. Defaults may be placeholders
   (`sha: str = "{{ param.sha }}"`).
 - **`compile`**: returns any Hera `Container` or `Script`: image, command, env, Secrets by name,
   resources, retries, timeouts, service account, node selection, security context, volumes. The
   only limits: it must be pure and take installation details from `ctx`.
-- **Every role a block plays**: the work in a stage, a handler (`on_success`, `on_failure`,
-  `finally_`), and the `status_reporter`. All three are ordinary blocks, so the notification
+- **Every role an action plays**: the work in a stage, a handler (`on_success`, `on_failure`,
+  `finally_`), and the `status_reporter`. All three are ordinary actions, so the notification
   system, the commit-status API, and every tool are your choice.
-- **Block libraries**: blocks are Python, so they can be packaged, versioned, and shared.
+- **Action libraries**: actions are Python, so they can be packaged, versioned, and shared.
 
 ### Configurable: the pipeline structure (data you set)
 
 | Model | What you set |
 |---|---|
 | `Pipeline` | `name`, `params`, `stages`, `on_success`, `on_failure`, `status`, `status_reporter`, `triggers` |
-| `Stage` | `name`, `blocks`, `when`, `status`, `on_success`, `on_failure`, `finally_` |
-| `Block` (inherited) | `name`, `when`, `status`, `on_success`, `on_failure`, `finally_` |
+| `Stage` | `name`, `steps`, `when`, `status`, `on_success`, `on_failure`, `finally_` |
+| `Step` | `name`, `action`, `when`, `status`, `on_success`, `on_failure`, `finally_` |
 | `Param` | `name`, `required` or `default`, `enum`, `description` |
 | `Trigger.cron` | schedule, `name`, `params`, `timezone` |
 
 These models are closed: they reject unknown fields, and they aren't meant to be subclassed.
-Subclass `Block` only.
+Subclass `Action` only.
 
 ### Python itself: composition
 
 Pipeline files are Python, so functions, loops, and modules are all available for building
-pipelines: factories that stamp out similar pipelines, shared stage definitions, lists of blocks
+pipelines: factories that stamp out similar pipelines, shared stage definitions, lists of steps
 built from data. See the patterns below.
 
 ### Escape valves
 
-- **Native Argo expressions** in block fields (`{{workflow.name}}`, `{{workflow.uid}}`) pass
+- **Native Argo expressions** in action fields (`{{workflow.name}}`, `{{workflow.uid}}`) pass
   through untouched.
-- **A block's container** can do anything a container can, so behavior Stagecraft doesn't model
-  can live inside a block.
+- **An action's container** can do anything a container can, so behavior Stagecraft doesn't model
+  can live inside an action.
 
 ### Fixed: what Stagecraft decides
 
-- How stages compile: each stage a sub-DAG of its blocks, stages in order, one `main` DAG.
+- How stages compile: each stage a sub-DAG of its steps, stages in order, one `main` DAG.
 - How handlers and statuses are wired (exit hooks, the `onExit` handler, report tasks) and what
   they report.
-- The placeholder namespaces: `param`, `values`, `step`, `status`.
+- The placeholder namespaces: `param`, `values`, `step`, `status`, and the outcome words
+  (`succeeded`, `failed`, `skipped`).
 - How Helm values are rendered (always strings) and how Argo expressions are escaped.
 - The available trigger kinds (`cron`).
-- Generated names: templates are `<stage>-<block>`, and so on; `main`,
+- Generated names: templates are `<stage>-<step>`, and so on; `main`,
   `on-exit`, `status-report`, and `status-reporter` are reserved.
 
 If a pipeline needs something on the fixed side, that's a change to Stagecraft. The features
@@ -125,9 +126,9 @@ each result to a module-level name: Stagecraft collects `Pipeline` objects from 
 variables, not from lists or function calls it can't see.
 
 ```python file=pipelines/libraries.py
-from stagecraft.spec import Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from blocks import Make, Notify
+from actions import Make, Notify
 
 
 def library_pipeline(name: str, targets: list[str]) -> Pipeline:
@@ -141,7 +142,7 @@ def library_pipeline(name: str, targets: list[str]) -> Pipeline:
         stages=[
             Stage(
                 "verify",
-                [Make(name=target, target=target) for target in targets],
+                [Step(target, Make(target=target)) for target in targets],
                 on_failure=[Notify(message="{{ step.name }} failed for {{ param.repo }}")],
             ),
         ],
@@ -152,17 +153,17 @@ auth_lib = library_pipeline("auth-lib-ci", ["lint", "test"])
 http_lib = library_pipeline("http-lib-ci", ["lint", "test", "bench"])
 ```
 
-The same idea works one level down: a function returning a `Stage`, or a list of blocks, shared
+The same idea works one level down: a function returning a `Stage`, or a list of steps, shared
 by several pipelines.
 
-### Designing blocks people enjoy using
+### Designing actions people enjoy using
 
 - **Name the intent.** `Make(target="lint")` reads better than a shell one-liner.
 - **Default the common case**, including placeholders (`repo: str = "{{ param.repo }}"`).
 - **Pass fields as environment variables** rather than splicing them into scripts.
 - **Take every installation detail from `ctx`**: images, Secret names, sizes.
 - **Validate what you can** in field validators, remembering they see placeholders as text.
-- **Test each block** with a small contract listing exactly the values it needs.
+- **Test each action** with a small contract listing exactly the values it needs.
 
 ### Deciding where things go
 
@@ -171,7 +172,7 @@ by several pipelines.
 | changes per run ("deploy this time?") | `Param` |
 | changes per installation (registry, Secret name, CPU) | Helm value, via `ctx.value` or `{{ values.a.b }}` |
 | is part of what the pipeline *is* (stages, schedule) | literal in the pipeline file |
-| is reusable work | a block |
+| is reusable work | an action |
 | must run after a step whatever happens | a `finally_` handler |
 | should appear as a GitHub check | `status=` on the step |
 
@@ -179,7 +180,7 @@ by several pipelines.
 
 - Put independent work in the same stage so it runs in parallel.
 - Start a new stage where work depends on earlier results.
-- Conditions, statuses, and handlers can go on a stage or a block. Put them on the stage when
+- Conditions, statuses, and handlers can go on a stage or a step. Put them on the stage when
   they're about the phase as a whole.
 
 ## A checklist for a new pipeline
@@ -187,7 +188,7 @@ by several pipelines.
 1. List the steps and what each depends on; group independent steps into stages.
 2. Decide the params (per run) and the Helm values (per installation) each step needs; add the
    values to the chart's schema as **required**, with defaults in `values.yaml`.
-3. Reuse blocks where they exist; write and test new ones where they don't.
+3. Reuse actions where they exist; write and test new ones where they don't.
 4. Add `status=` to the pipeline (and stages) that should be GitHub checks, plus a
    `status_reporter`; require the pipeline's context in branch protection.
 5. Add handlers for notifications and cleanup; triggers for schedules.
@@ -200,17 +201,17 @@ The render stops at the first problem and names where it is. Common messages:
 | Message (abridged) | Cause | Fix |
 |---|---|---|
 | `undeclared param 'sha'` | `{{ param.sha }}` with no `Param("sha")` | Declare the param |
-| `'{{ step.name }}' is only available in handler blocks` | `{{ step.* }}` outside a handler | Move it into an `on_*`/`finally_` block |
+| `'{{ step.name }}' is only available in handlers` | `{{ step.* }}` outside a handler | Move it into an `on_*`/`finally_` handler |
 | `value 'build.memory' is not declared in the values schema` | The chart's schema lacks the path | Add it to the schema (required), or fix the path |
 | `value 'build.region' is optional in the values schema` | The path isn't required at every level | Mark it required and give it a default |
 | `value 'build.retries' is integer in the values schema, but is used as string` | Type mismatch | Change the schema type or the type passed to `ctx.value` |
-| `handler blocks cannot set when, status, or handlers` | A handler with `when=`, `status=`, or handlers | Remove them; put conditions on the owning step |
-| `duplicate block name 'make'` | Two blocks of one class in a stage | Give each a `name=` |
-| `must be a lowercase DNS label` | A stage or block name like `Verify` | Use `a-z`, `0-9`, `-` |
+| `handler steps cannot set when, status, or handlers` | A handler with `when=`, `status=`, or handlers | Remove them; put conditions on the owning step |
+| `duplicate step name 'make'` | Two bare actions of one class in a stage | Wrap each in `Step("<name>", ...)` |
+| `must be a lowercase DNS label` | A stage or step name like `Verify` | Use `a-z`, `0-9`, `-` |
 | `status contexts need a status_reporter` / `need required params 'repo' and 'sha'` | Statuses without their prerequisites | Add the reporter and the params |
 | `trigger 'nightly': required param 'sha' has no value` | A trigger doesn't set a required param | Add it to the trigger's `params` |
-| `template name 'a-b-c' is generated twice` | Names like stage `a` + block `b-c` and stage `a-b` + block `c` | Rename a stage or block |
-| `unbalanced '{{' in rendered output` | A lone `{{` or `}}` in a field | Balance it, or move the text into a file the block reads |
+| `template name 'a-b-c' is generated twice` | Names like stage `a` + step `b-c` and stage `a-b` + step `c` | Rename a stage or step |
+| `unbalanced '{{' in rendered output` | A lone `{{` or `}}` in a field | Balance it, or move the text into a file the action reads |
 | `no Pipeline found at module level` | A pipeline file without a module-level `Pipeline` | Assign the pipeline to a variable |
 
 ## Where to go next

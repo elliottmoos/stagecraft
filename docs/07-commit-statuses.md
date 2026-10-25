@@ -2,16 +2,16 @@
 
 On GitHub, a pull request shows checks next to each commit, and branch protection can require
 some of them to pass before merging. Stagecraft can report a check for the pipeline and for any
-stage or block, through a block you provide.
+stage or step, through an action you provide.
 
 ## Declaring statuses
 
-Give a step a **context**, the check's name:
+Give the pipeline, a stage, or a step a **context**, the check's name:
 
 ```python
 Pipeline(..., status="ci/pipeline")
 Stage("verify", [...], status="ci/verify")
-Make(name="unit-tests", target="test", status="ci/unit-tests")
+Step("unit-tests", Make(target="test"), status="ci/unit-tests")
 ```
 
 Contexts must be unique within a pipeline.
@@ -35,10 +35,10 @@ A step that never starts, because an earlier stage failed, is never reported, so
 pending. The pipeline's own context still reports `failure`, which is why **the pipeline's
 context is the one to require** in branch protection; step contexts add detail.
 
-## The reporter block
+## The reporter action
 
 Stagecraft doesn't call GitHub itself. Every report goes through the pipeline's
-**`status_reporter`**, an ordinary block that you write once. It reads three placeholders:
+**`status_reporter`**, an ordinary action that you write once. It reads three placeholders:
 
 | Placeholder | Value |
 |---|---|
@@ -58,7 +58,7 @@ The reporter takes its placeholders as field defaults (placeholders work in fiel
 `compile`; chapter 3), passes them to curl as environment variables, and reads the token from a
 Secret named by a Helm value:
 
-```python file=blocks.py
+```python file=actions.py
 import re
 
 from hera.workflows import Container, Env, SecretEnv
@@ -66,10 +66,10 @@ from hera.workflows.models import ResourceRequirements
 from pydantic import field_validator
 
 from stagecraft.context import CompileContext
-from stagecraft.spec import Block
+from stagecraft.spec import Action
 
 
-class Shell(Block):
+class Shell(Action):
     """Runs a shell script in the chart's shell image."""
 
     script: str
@@ -82,7 +82,7 @@ class Shell(Block):
         )
 
 
-class Make(Block):
+class Make(Action):
     """Runs one make target in the chart's build image, with the chart's build resources.
 
     `variables` are passed as make variables (NAME=value).
@@ -112,7 +112,7 @@ class Make(Block):
         )
 
 
-class Notify(Block):
+class Notify(Action):
     """Posts a message to a chat channel (this stand-in prints it)."""
 
     message: str
@@ -127,7 +127,7 @@ class Notify(Block):
         )
 
 
-class GitHubStatus(Block):
+class GitHubStatus(Action):
     """Posts a commit status to GitHub. Used as a pipeline's status_reporter."""
 
     repo: str = "{{ param.repo }}"
@@ -161,9 +161,9 @@ class GitHubStatus(Block):
 The pipeline reports on itself and on each stage after `prepare`:
 
 ```python file=pipelines/service_ci.py
-from stagecraft.spec import Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from blocks import GitHubStatus, Make, Notify, Shell
+from actions import GitHubStatus, Make, Notify, Shell
 
 pipeline = Pipeline(
     name="service-ci",
@@ -176,29 +176,29 @@ pipeline = Pipeline(
     status="ci/pipeline",
     status_reporter=GitHubStatus(),
     stages=[
-        Stage("prepare", [Shell(name="fetch", script="echo fetching {{ param.repo }}")]),
+        Stage("prepare", [Step("fetch", Shell(script="echo fetching {{ param.repo }}"))]),
         Stage(
             "verify",
             [
-                Make(name="lint", target="lint"),
-                Make(name="unit-tests", target="test"),
+                Step("lint", Make(target="lint")),
+                Step("unit-tests", Make(target="test")),
             ],
             status="ci/verify",
             on_failure=[Notify(message="{{ step.name }} failed for {{ param.sha }}")],
         ),
         Stage(
             "package",
-            [Make(name="image", target="image", variables={"PUSH": "{{ param.push }}"})],
+            [Step("image", Make(target="image", variables={"PUSH": "{{ param.push }}"}))],
             status="ci/package",
         ),
         Stage(
             "deploy",
-            [Make(name="staging", target="deploy-staging")],
+            [Step("staging", Make(target="deploy-staging"))],
             when="{{ param.deploy }} == 'true'",
             status="ci/deploy",
         ),
     ],
-    on_failure=[Notify(message="{{ step.name }} ended {{ step.status }}")],
+    on_failure=[Notify(message="{{ step.name }} {{ step.outcome }}")],
 )
 ```
 
@@ -282,15 +282,15 @@ pipeline's own).
 
 - Statuses need a `status_reporter` and required `repo` and `sha` params; the render fails
   without them.
-- The reporter is a plain block: no `when`, `status`, handlers, or template inputs of its own.
-- If a run is terminated (`argo terminate`), or stopped while a block with a status is running
+- The reporter is a bare action (not a `Step`), with no template inputs of its own.
+- If a run is terminated (`argo terminate`), or stopped while a step with a status is running
   (`argo stop`), that context can stay `pending`. Re-running the workflow updates it.
 
 ## Recap
 
-- `status="<context>"` on the pipeline, a stage, or a block reports pending, then the outcome.
+- `status="<context>"` on the pipeline, a stage, or a step reports pending, then the outcome.
 - Skipped steps report success ("Skipped"); never-started steps aren't reported; require the
   pipeline's context.
-- Your `status_reporter` block makes the API call; reporting never fails the build.
+- Your `status_reporter` action makes the API call; reporting never fails the build.
 
 Next: [8. Triggers](08-triggers.md).

@@ -1,11 +1,11 @@
-"""Strings that are hard to carry through YAML and Helm unchanged. Each one is put in a block's
+"""Strings that are hard to carry through YAML and Helm unchanged. Each one is put in an action's
 script, a param default, and a param description; `helm template` must reproduce the compiled
 manifest exactly (DESIGN.md section 8)."""
 
 from stagecraft.compile import compile_pipeline
-from stagecraft.spec import Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 from fixtures.contract import CONTEXT
 from support import build_chart, helm_template, with_fixture_values
 
@@ -58,7 +58,7 @@ def pipeline() -> Pipeline:
             for i, text in enumerate(HOSTILE)
         ],
         stages=[
-            Stage("only", [Shell(name=f"s{i}", script=text) for i, text in enumerate(HOSTILE)])
+            Stage("only", [Step(f"s{i}", Shell(script=text)) for i, text in enumerate(HOSTILE)])
         ],
     )
 

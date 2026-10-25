@@ -15,7 +15,7 @@ def load_pipelines(paths: list[Path]) -> list[Pipeline]:
 
     A directory contributes its *.py files (not recursively, skipping names starting with '_').
     The working directory is put on sys.path so pipeline files can import the project's own
-    block modules, as they would in a pipelines repo.
+    action modules, as they would in a pipelines repo.
     """
     if str(Path.cwd()) not in sys.path:
         sys.path.insert(0, str(Path.cwd()))

@@ -1,9 +1,9 @@
 import pytest
 from pydantic import ValidationError
 
-from stagecraft.spec import Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 
 
 def test_param_takes_name_positionally():
@@ -29,20 +29,57 @@ def test_param_default_must_be_in_enum():
         Param("push", default="maybe", enum=["true", "false"])
 
 
-def test_block_name_defaults_to_kebab_case_class_name():
+def test_a_bare_action_is_a_step_named_after_its_class():
     class UnitTests(Shell):
         pass
 
-    assert UnitTests(script="true").block_name == "unit-tests"
-    assert Shell(name="lint", script="true").block_name == "lint"
+    stage = Stage("verify", [UnitTests(script="true"), Step("lint", Shell(script="true"))])
+
+    assert [(s.name, type(s.action)) for s in stage.steps] == [
+        ("unit-tests", UnitTests),
+        ("lint", Shell),
+    ]
 
 
-def test_block_names_must_be_unique_within_stage():
-    with pytest.raises(ValidationError, match="duplicate block name 'shell'"):
+def test_step_names_must_be_unique_within_stage():
+    with pytest.raises(ValidationError, match=r"duplicate step name 'shell'; wrap one in Step"):
         Stage("verify", [Shell(script="a"), Shell(script="b")])
 
 
-def test_stage_needs_a_block():
+def test_actions_have_no_step_fields():
+    # Conditions, statuses, and handlers belong to the step that places an action.
+    for field in ("name", "when", "status", "on_failure"):
+        with pytest.raises(ValidationError, match=field):
+            Shell(script="true", **{field: "x"})
+
+
+def test_handlers_are_steps_too():
+    stage = Stage(
+        "s",
+        [Shell(script="true")],
+        on_failure=[Shell(script="a"), Step("page", Shell(script="b"))],
+    )
+
+    assert [h.name for h in stage.on_failure] == ["shell", "page"]
+
+
+def test_handler_steps_cannot_set_step_features():
+    with pytest.raises(ValidationError, match="handler steps cannot set when, status, or handlers"):
+        Stage("s", [Shell(script="true")], on_failure=[Step("page", Shell(script="b"), when="x")])
+
+
+def test_status_reporter_is_an_action():
+    with pytest.raises(ValidationError, match="status_reporter"):
+        Pipeline(
+            name="p",
+            params=[Param("repo", required=True), Param("sha", required=True)],
+            status="ci/p",
+            status_reporter=Step("report", Shell(script="")),
+            stages=[Stage("s", [Shell(script="true")])],
+        )
+
+
+def test_stage_needs_a_step():
     with pytest.raises(ValidationError, match="at least 1 item"):
         Stage("verify", [])
 
@@ -79,5 +116,7 @@ def test_there_is_no_shared_workspace():
     # Files cross job boundaries only as artifacts (DESIGN.md section 16).
     with pytest.raises(ValidationError, match="workspace"):
         Shell(script="true", workspace="read")
+    with pytest.raises(ValidationError, match="workspace"):
+        Step("s", Shell(script="true"), workspace="read")
     with pytest.raises(ValidationError, match="workspace"):
         Pipeline(name="p", stages=[Stage("s", [Shell(script="true")])], workspace={})

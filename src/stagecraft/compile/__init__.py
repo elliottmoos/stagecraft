@@ -14,26 +14,23 @@ from hera.workflows.models import Parameter as ParameterModel
 from stagecraft.compile.placeholders import Scopes, lower, lower_model
 from stagecraft.context import CompileContext
 from stagecraft.errors import CompileError
-from stagecraft.spec import HANDLER_FIELDS, Block, Param, Pipeline, Stage
+from stagecraft.spec import HANDLER_FIELDS, Action, Param, Pipeline, Stage, Step
 
 ENTRYPOINT = "main"
 EXIT_HANDLER = "on-exit"
 STATUS_REPORTER = "status-reporter"
 STATUS_REPORT = "status-report"
 
-# `{{ step.* }}` in pipeline-level handlers refers to the workflow itself.
-_WORKFLOW_STEP = {"name": "{{workflow.name}}", "status": "{{workflow.status}}"}
 
 # Handlers run from a generated DAG whose tasks are guarded by a `when` on the step's status: the
-# workflow's `onExit` for pipeline handlers, a task `exit` hook for stage and block handlers.
+# workflow's `onExit` for pipeline handlers, a task `exit` hook for stage and step handlers.
 # Verified on Argo 4.1.6: expression hooks on a sub-DAG task never fire when another task depends
 # on it, while `exit` hooks fire and can pass `{{tasks.<name>.status}}`. A handler template is
-# compiled per outcome so `{{ step.status }}` can be fixed in it; Error is reported as Failed.
+# compiled per outcome so `{{ step.outcome }}` can be fixed in it; Argo's Error counts as failed.
 _CONDITIONS = {
     "succeeded": "{status} == Succeeded",
     "failed": "{status} == Failed || {status} == Error",
 }
-_OUTCOME_STATUS = {"succeeded": "Succeeded", "failed": "Failed"}
 _HANDLER_OUTCOMES = {
     "on_success": ["succeeded"],
     "on_failure": ["failed"],
@@ -56,8 +53,8 @@ _BEST_EFFORT = ContinueOn(failed=True, error=True)
 def compile_pipeline(pipeline: Pipeline, ctx: CompileContext) -> WorkflowTemplate:
     """Compile a pipeline to a WorkflowTemplate.
 
-    Each stage becomes a sub-DAG template of parallel block tasks, invoked as one task in the
-    entrypoint DAG. Stage N depends on stage N-1, one edge per stage. Stage and block handlers run
+    Each stage becomes a sub-DAG template of parallel step tasks, invoked as one task in the
+    entrypoint DAG. Stage N depends on stage N-1, one edge per stage. Stage and step handlers run
     from task `exit` hooks, pipeline handlers from the workflow's `onExit`. Commit statuses are
     report tasks around each step and in those exit handlers. Helm values come from `ctx`, which
     validates every reference against the chart's values contract.
@@ -70,11 +67,11 @@ def compile_pipeline(pipeline: Pipeline, ctx: CompileContext) -> WorkflowTemplat
     depends = None
     for stage in pipeline.stages:
         where = f"pipeline {pipeline.name!r}, stage {stage.name!r}"
-        stage_dag, block_templates = _compile_stage(pipeline, stage, lowering)
+        stage_dag, step_templates = _compile_stage(pipeline, stage, lowering)
         hooks, hook_templates = _compile_exit_hook(
             stage, task=stage.name, path=stage.name, lowering=lowering, where=where
         )
-        templates += [stage_dag, *block_templates, *hook_templates]
+        templates += [stage_dag, *step_templates, *hook_templates]
         when = _lower_when(stage.when, lowering, where)
         reports, stage_depends = _status_tasks(stage, stage.name, depends=depends, when=when)
         main_tasks += reports
@@ -141,24 +138,24 @@ def _compile_param(param: Param) -> Parameter:
 def _compile_stage(pipeline: Pipeline, stage: Stage, lowering: _Lowering):
     tasks = []
     templates = []
-    for block in stage.blocks:
-        name = f"{stage.name}-{block.block_name}"
-        where = f"pipeline {pipeline.name!r}, stage {stage.name!r}, block {block.block_name!r}"
-        template = _compile_block(block, name=name, lowering=lowering, where=where)
+    for step in stage.steps:
+        name = f"{stage.name}-{step.name}"
+        where = f"pipeline {pipeline.name!r}, stage {stage.name!r}, step {step.name!r}"
+        template = _compile_action(step.action, name=name, lowering=lowering, where=where)
         hooks, hook_templates = _compile_exit_hook(
-            block,
-            task=block.block_name,
-            path=f"{stage.name}/{block.block_name}",
+            step,
+            task=step.name,
+            path=f"{stage.name}/{step.name}",
             lowering=lowering,
             where=where,
         )
         templates += [template, *hook_templates]
-        when = _lower_when(block.when, lowering, where)
-        reports, depends = _status_tasks(block, block.block_name, depends=None, when=when)
+        when = _lower_when(step.when, lowering, where)
+        reports, depends = _status_tasks(step, step.name, depends=None, when=when)
         tasks += reports
         tasks.append(
             Task(
-                name=block.block_name,
+                name=step.name,
                 template=template,
                 depends=depends,
                 when=when,
@@ -168,13 +165,13 @@ def _compile_stage(pipeline: Pipeline, stage: Stage, lowering: _Lowering):
     return DAG(name=stage.name, tasks=tasks), templates
 
 
-def _compile_exit_hook(step: Block | Stage, task: str, path: str, lowering: _Lowering, where: str):
+def _compile_exit_hook(step: Step | Stage, task: str, path: str, lowering: _Lowering, where: str):
     """An `exit` hook running the step's handlers and final status report, plus the templates
     it needs.
 
     `task` is the step's task name in its DAG and `path` is its `{{ step.name }}`. Generated
-    templates are named after the step's own template: "<stage>[-<block>]-on-exit" for the
-    handler DAG and "<stage>[-<block>]-<handler task>" for each handler.
+    templates are named after the step's own template: "<stage>[-<step>]-on-exit" for the
+    handler DAG and "<stage>[-<step>]-<handler task>" for each handler.
     """
     prefix = path.replace("/", "-")
     templates = _compile_handler_dag(
@@ -183,7 +180,7 @@ def _compile_exit_hook(step: Block | Stage, task: str, path: str, lowering: _Low
         dag_name=f"{prefix}-on-exit",
         prefix=f"{prefix}-",
         status=f"{{{{inputs.parameters.{_STATUS_INPUT}}}}}",
-        step_context=lambda outcome: {"name": path, "status": _OUTCOME_STATUS[outcome]},
+        step_context=lambda outcome: {"name": path, "outcome": outcome},
         report=step.status,
         lowering=lowering,
         where=where,
@@ -207,7 +204,7 @@ def _compile_exit_handler(pipeline: Pipeline, lowering: _Lowering) -> list:
         dag_name=EXIT_HANDLER,
         prefix="",
         status="{{workflow.status}}",
-        step_context=lambda outcome: _WORKFLOW_STEP,
+        step_context=lambda outcome: {"name": "{{workflow.name}}", "outcome": outcome},
         report=pipeline.status,
         lowering=lowering,
         where=f"pipeline {pipeline.name!r}",
@@ -215,7 +212,7 @@ def _compile_exit_handler(pipeline: Pipeline, lowering: _Lowering) -> list:
 
 
 def _compile_handler_dag(
-    owner: Pipeline | Stage | Block,
+    owner: Pipeline | Stage | Step,
     fields: tuple[str, ...],
     dag_name: str,
     prefix: str,
@@ -239,14 +236,14 @@ def _compile_handler_dag(
         kind = field.rstrip("_").replace("_", "-")
         for handler in getattr(owner, field):
             for outcome in outcomes:
-                key = f"{kind}-{handler.block_name}"
+                key = f"{kind}-{handler.name}"
                 if len(outcomes) > 1:
                     key += f"-{outcome}"
-                template = _compile_block(
-                    handler,
+                template = _compile_action(
+                    handler.action,
                     name=f"{prefix}{key}",
                     lowering=lowering,
-                    where=f"{where}, {field} block {handler.block_name!r}",
+                    where=f"{where}, {field} step {handler.name!r}",
                     scopes={"step": step_context(outcome)},
                 )
                 templates.append(template)
@@ -258,7 +255,7 @@ def _compile_handler_dag(
     return [DAG(name=dag_name, inputs=inputs, tasks=tasks), *templates]
 
 
-def _status_tasks(step: Block | Stage, task: str, depends: str | None, when: str | None):
+def _status_tasks(step: Step | Stage, task: str, depends: str | None, when: str | None):
     """Report tasks that run before a step with a status context, and the step's new depends.
 
     "pending" shares the step's depends and when, and the step depends on it. A step with
@@ -295,11 +292,11 @@ def _report(name: str, context: str, state: str, description: str, **task_fields
 
 
 def _compile_status_reporter(pipeline: Pipeline, lowering: _Lowering) -> list:
-    """The reporter block's template and the best-effort `status-report` DAG that calls it."""
+    """The reporter's template and the best-effort `status-report` DAG that calls it."""
     reporter = pipeline.status_reporter
     assert reporter is not None  # guaranteed by Pipeline validation when statuses exist
-    where = f"pipeline {pipeline.name!r}, status_reporter block {reporter.block_name!r}"
-    template = _compile_block(
+    where = f"pipeline {pipeline.name!r}, status_reporter"
+    template = _compile_action(
         reporter, name=STATUS_REPORTER, lowering=lowering, where=where, scopes=_REPORT_SCOPE
     )
     if template.inputs:
@@ -319,17 +316,15 @@ def _compile_status_reporter(pipeline: Pipeline, lowering: _Lowering) -> list:
     ]
 
 
-def _compile_block(
-    block: Block,
+def _compile_action(
+    action: Action,
     name: str,
     lowering: _Lowering,
     where: str,
     scopes: Scopes | None = None,
 ):
     try:
-        lowered = lower_model(
-            block, lowering.names, scopes, lowering.ctx.value, exclude=HANDLER_FIELDS
-        )
+        lowered = lower_model(action, lowering.names, scopes, lowering.ctx.value)
         template = lowered.compile(lowering.ctx)
     except CompileError as e:
         raise CompileError(f"{where}: {e}") from e
@@ -351,8 +346,8 @@ def _check_unique_template_names(pipeline: Pipeline, templates) -> None:
         if template.name in seen:
             raise CompileError(
                 f"pipeline {pipeline.name!r}: template name {template.name!r} is generated twice; "
-                f"rename a stage or block ({ENTRYPOINT!r}, {EXIT_HANDLER!r}, {STATUS_REPORT!r}, "
-                f"and {STATUS_REPORTER!r} are reserved, and generated '<stage>-<block>' names "
+                f"rename a stage or step ({ENTRYPOINT!r}, {EXIT_HANDLER!r}, {STATUS_REPORT!r}, "
+                f"and {STATUS_REPORTER!r} are reserved, and generated '<stage>-<step>' names "
                 "must not collide with other template names)"
             )
         seen.add(template.name)

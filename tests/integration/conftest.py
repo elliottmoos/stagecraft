@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from stagecraft.spec import Block, Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
 from support import build_chart, require_tool, run, unique_name
 
@@ -93,14 +93,14 @@ def argo(kind_cluster, tmp_path) -> Argo:
 
 
 @pytest.fixture
-def run_block(argo):
-    """Run one block as a one-step pipeline and return the finished Workflow."""
+def run_step(argo):
+    """Run one step as a one-step pipeline and return the finished Workflow."""
 
-    def run_one(block: Block, params: dict[str, str] | None = None):
+    def run_one(step: Step, params: dict[str, str] | None = None):
         pipeline = Pipeline(
-            name=unique_name(f"run-{block.block_name}"),
+            name=unique_name(f"run-{step.name}"),
             params=[Param(k, required=True) for k in params or {}],
-            stages=[Stage("run", [block])],
+            stages=[Stage("run", [step])],
         )
         return argo.run(pipeline, params)
 

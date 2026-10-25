@@ -8,7 +8,7 @@ from stagecraft.errors import CompileError
 from stagecraft.serialize import serialize
 from stagecraft.spec import Param, Pipeline, Stage, Trigger
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 from fixtures.contract import CONTEXT
 from fixtures.pipelines import smoke, triggers
 

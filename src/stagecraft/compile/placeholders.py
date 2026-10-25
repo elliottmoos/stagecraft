@@ -10,10 +10,10 @@ from stagecraft.errors import CompileError
 # Only stagecraft namespaces are matched; native Argo expressions pass through untouched.
 _PLACEHOLDER = re.compile(r"\{\{\s*(param|step|status|values)\.([A-Za-z0-9_.-]+)\s*\}\}")
 
-# Namespaces that only exist in some blocks, and where they exist.
+# Namespaces that only exist in some actions, and where they exist.
 _SCOPED = {
-    "step": "handler blocks (on_success, on_failure, finally_)",
-    "status": "the status_reporter block",
+    "step": "handlers (on_success, on_failure, finally_)",
+    "status": "the status_reporter",
 }
 
 Scopes = Mapping[str, Mapping[str, str]]
@@ -71,16 +71,9 @@ def lower_model[M: BaseModel](
     params: Collection[str],
     scopes: Scopes | None = None,
     values: Values | None = None,
-    exclude: Collection[str] = (),
 ) -> M:
-    """Return a copy of `model` with placeholders lowered in every string it contains.
-
-    Fields in `exclude` are left as they are (handler blocks, which are lowered in their own
-    context).
-    """
-    return model.model_copy(
-        update={k: _lower_value(v, params, scopes, values) for k, v in model if k not in exclude}
-    )
+    """Return a copy of `model` with placeholders lowered in every string it contains."""
+    return model.model_copy(update={k: _lower_value(v, params, scopes, values) for k, v in model})
 
 
 def _lower_value(value, params: Collection[str], scopes: Scopes | None, values: Values | None):

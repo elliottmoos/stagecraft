@@ -2,9 +2,9 @@ import pytest
 
 from stagecraft.compile import compile_pipeline
 from stagecraft.errors import CompileError
-from stagecraft.spec import Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 from fixtures.contract import CONTEXT
 from fixtures.pipelines import smoke
 
@@ -37,14 +37,14 @@ def test_stages_run_in_order_with_one_depends_edge_each():
     ]
 
 
-def test_each_stage_is_a_sub_dag_of_parallel_blocks():
+def test_each_stage_is_a_sub_dag_of_parallel_steps():
     assert tasks(manifest(smoke.pipeline), "verify") == [
         ("lint", "verify-lint", None),
         ("unit-tests", "verify-unit-tests", None),
     ]
 
 
-def test_block_templates_are_named_stage_dash_block():
+def test_step_templates_are_named_stage_dash_step():
     lint = template(manifest(smoke.pipeline), "verify-lint")
 
     assert lint["container"]["args"] == ["echo lint; sleep 2"]
@@ -62,7 +62,7 @@ def test_params_become_workflow_arguments():
     ]
 
 
-def test_param_placeholders_in_blocks_are_lowered():
+def test_param_placeholders_in_actions_are_lowered():
     clone = template(manifest(smoke.pipeline), "prepare-clone")
 
     assert clone["container"]["args"] == ["echo cloning {{workflow.parameters.repo}}"]
@@ -71,20 +71,20 @@ def test_param_placeholders_in_blocks_are_lowered():
 def test_compile_does_not_mutate_the_spec():
     compile_pipeline(smoke.pipeline, CONTEXT)
 
-    assert smoke.pipeline.stages[0].blocks[0].script == "echo cloning {{ param.repo }}"
+    assert smoke.pipeline.stages[0].steps[0].action.script == "echo cloning {{ param.repo }}"
 
 
 def test_undeclared_param_error_names_the_location():
     pipeline = Pipeline(name="p", stages=[Stage("s", [Shell(script="{{ param.nope }}")])])
 
-    with pytest.raises(CompileError, match="pipeline 'p', stage 's', block 'shell': undeclared"):
+    with pytest.raises(CompileError, match="pipeline 'p', stage 's', step 'shell': undeclared"):
         compile_pipeline(pipeline, CONTEXT)
 
 
 @pytest.mark.parametrize(
     "stages",
     [
-        [Stage("a-b", [Shell(script="x")]), Stage("a", [Shell(name="b", script="x")])],
+        [Stage("a-b", [Shell(script="x")]), Stage("a", [Step("b", Shell(script="x"))])],
         [Stage("main", [Shell(script="x")])],
     ],
 )

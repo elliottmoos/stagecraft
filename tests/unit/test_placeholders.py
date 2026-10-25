@@ -33,16 +33,16 @@ def test_values_placeholders_need_a_resolver():
 
 
 def test_step_placeholders_lower_to_the_given_step_context():
-    step = {"name": "{{workflow.name}}", "status": "{{workflow.status}}"}
+    step = {"name": "{{workflow.name}}", "outcome": "failed"}
 
-    assert lower("{{ step.name }} is {{ step.status }}", params=set(), scopes={"step": step}) == (
-        "{{workflow.name}} is {{workflow.status}}"
+    assert lower("{{ step.name }} is {{ step.outcome }}", params=set(), scopes={"step": step}) == (
+        "{{workflow.name}} is failed"
     )
 
 
 def test_step_placeholders_need_a_step_context():
-    with pytest.raises(CompileError, match="only available in handler blocks"):
-        lower("{{ step.status }}", params=set())
+    with pytest.raises(CompileError, match="only available in handlers"):
+        lower("{{ step.outcome }}", params=set())
 
 
 def test_native_argo_expressions_pass_through():

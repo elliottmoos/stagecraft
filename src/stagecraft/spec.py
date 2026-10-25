@@ -5,7 +5,7 @@ from abc import abstractmethod
 from typing import Annotated, Self
 
 from hera.workflows import Container, Script
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from stagecraft.context import CompileContext
 
@@ -80,35 +80,61 @@ class Param(_Model):
 HANDLER_FIELDS = ("on_success", "on_failure", "finally_")
 
 
-class _Step(_Model):
-    """What blocks and stages share: a condition, and handlers that run after the step finishes.
+class Action(_Model):
+    """Base type for actions: reusable work that runs as one container. A subclass declares its
+    fields and compiles to one Hera template. Where and when it runs is up to the Step that
+    places it.
+
+    String fields may contain placeholders such as `{{ param.repo }}` or `{{ values.a.b }}`; the
+    compiler lowers them before calling `compile`. Inside `compile`, Helm values come only from
+    `ctx.value(path, type)`. The compiler also names the returned template.
+    """
+
+    @abstractmethod
+    def compile(self, ctx: CompileContext) -> Container | Script: ...
+
+
+def _as_steps(items: object) -> object:
+    """Wrap bare actions in a list as steps named after their class (Make -> "make")."""
+    if not isinstance(items, list):
+        return items
+    return [Step(_kebab(type(i).__name__), i) if isinstance(i, Action) else i for i in items]
+
+
+class _Node(_Model):
+    """What steps and stages share: a condition, a commit status, and handlers that run after
+    they finish.
 
     `when` is an Argo condition. Inside it `{{ param.x }}` is a quoted string, so compare it with
     quoted values: `when="{{ param.deploy }} == 'true'"`.
 
-    Handlers are ordinary blocks run from the step's Argo `exit` hook. `on_success` runs when the
-    step succeeds, `on_failure` when it fails or errors, `finally_` in both cases; none run when
-    `when` skips the step.
+    Handlers are steps run from the node's Argo `exit` hook (a bare action is a step named after
+    its class). `on_success` runs when the node succeeds, `on_failure` when it fails or errors,
+    `finally_` in both cases; none run when `when` skips the node.
 
     `status` is a commit-status context (for example "ci/unit-tests"). The pipeline's
-    status_reporter posts "pending" just before the step starts, then "success", "failure", or
+    status_reporter posts "pending" just before the node starts, then "success", "failure", or
     "error" when it finishes, or "success" with the description "Skipped" when `when` skips it.
     Reporting is best-effort and never fails the pipeline.
 
-    In handlers, `{{ step.name }}` is the step's path ("stage" or
-    "stage/block") and `{{ step.status }}` is "Succeeded" or "Failed". A failing handler is shown
-    in the Argo UI but, unlike a pipeline-level handler, does not fail the pipeline (an Argo
-    limitation).
+    In handlers, `{{ step.name }}` is the node's path ("stage" or "stage/step") and
+    `{{ step.outcome }}` is "succeeded" or "failed". A failing handler is shown in the Argo UI
+    but, unlike a pipeline-level handler, does not fail the pipeline (an Argo limitation).
     """
 
     when: str | None = None
     status: str | None = None
-    on_success: list["Block"] = []
-    on_failure: list["Block"] = []
-    finally_: list["Block"] = []
+    on_success: list["Step"] = []
+    on_failure: list["Step"] = []
+    finally_: list["Step"] = []
 
     def _label(self) -> str:
         raise NotImplementedError
+
+    @field_validator(*HANDLER_FIELDS, mode="before")
+    @classmethod
+    def _wrap_handlers(cls, items: object) -> object:
+        return _as_steps(items)
 
     @model_validator(mode="after")
     def _check_handlers(self) -> Self:
@@ -116,72 +142,61 @@ class _Step(_Model):
         return self
 
 
-class Block(_Step):
-    """Base type for blocks. A subclass declares its fields and compiles to one Hera template.
-
-    String fields may contain placeholders such as `{{ param.repo }}` or `{{ values.a.b }}`; the
-    compiler lowers them before calling `compile`. Inside `compile`, Helm values come only from
-    `ctx.value(path, type)`. The compiler also names the returned template.
-    """
-
-    name: Name | None = None
-
-    @property
-    def block_name(self) -> str:
-        return self.name or _kebab(type(self).__name__)
-
-    def _label(self) -> str:
-        return f"block {self.block_name!r}"
-
-    @abstractmethod
-    def compile(self, ctx: CompileContext) -> Container | Script: ...
-
-
-class Stage(_Step):
-    """An ordered step of a pipeline. Its blocks run in parallel."""
+class Step(_Node):
+    """An action placed in a stage (or a handler list) under a name, unique where it's placed."""
 
     name: Name
-    blocks: Annotated[list[Block], Field(min_length=1)]
+    action: Action
 
-    def __init__(self, name: str, blocks: list[Block], /, **data) -> None:
-        super().__init__(name=name, blocks=blocks, **data)
+    def __init__(self, name: str, action: Action, /, **data) -> None:
+        super().__init__(name=name, action=action, **data)
+
+    def _label(self) -> str:
+        return f"step {self.name!r}"
+
+
+class Stage(_Node):
+    """An ordered phase of a pipeline. Its steps run in parallel; a bare action is a step named
+    after its class."""
+
+    name: Name
+    steps: Annotated[list[Step], Field(min_length=1)]
+
+    def __init__(self, name: str, steps: list[Step | Action], /, **data) -> None:
+        super().__init__(name=name, steps=steps, **data)
 
     def _label(self) -> str:
         return f"stage {self.name!r}"
 
+    @field_validator("steps", mode="before")
+    @classmethod
+    def _wrap_steps(cls, items: object) -> object:
+        return _as_steps(items)
+
     @model_validator(mode="after")
-    def _check_block_names(self) -> Self:
-        _check_block_names(f"stage {self.name!r}", self.blocks)
+    def _check_step_names(self) -> Self:
+        _check_step_names(f"stage {self.name!r}", self.steps)
         return self
 
 
-def _check_block_names(where: str, blocks: list[Block]) -> None:
-    names = [b.block_name for b in blocks]
-    for name in names:
-        _check_name(name)
-    if dupes := _duplicates(names):
+def _check_step_names(where: str, steps: list[Step]) -> None:
+    if dupes := _duplicates([s.name for s in steps]):
         raise ValueError(
-            f"{where}: duplicate block name {dupes[0]!r}; "
-            "give blocks of the same type a distinct name="
+            f'{where}: duplicate step name {dupes[0]!r}; wrap one in Step("<name>", ...) to name it'
         )
 
 
 def _check_handlers(where: str, owner: BaseModel, fields: tuple[str, ...]) -> None:
     for field in fields:
-        handlers: list[Block] = getattr(owner, field)
-        _check_block_names(f"{where} {field}", handlers)
+        handlers: list[Step] = getattr(owner, field)
+        _check_step_names(f"{where} {field}", handlers)
         for handler in handlers:
-            if not _is_plain(handler):
+            has_handlers = any(getattr(handler, f) for f in HANDLER_FIELDS)
+            if handler.when is not None or handler.status is not None or has_handlers:
                 raise ValueError(
-                    f"{where} {field}: block {handler.block_name!r}: "
-                    "handler blocks cannot set when, status, or handlers"
+                    f"{where} {field}: step {handler.name!r}: "
+                    "handler steps cannot set when, status, or handlers"
                 )
-
-
-def _is_plain(block: Block) -> bool:
-    """True if the block sets no step features: it only runs (handlers, the status reporter)."""
-    has_handlers = any(getattr(block, f) for f in HANDLER_FIELDS)
-    return block.when is None and block.status is None and not has_handlers
 
 
 class Trigger(_Model):
@@ -213,14 +228,14 @@ class Trigger(_Model):
 
 
 class Pipeline(_Model):
-    """A pipeline: ordered stages of parallel blocks, compiled to one WorkflowTemplate.
+    """A pipeline: ordered stages of parallel steps, compiled to one WorkflowTemplate.
 
-    `on_success` and `on_failure` blocks run in parallel after the pipeline finishes, depending
-    on its result. They can use `{{ step.name }}` and `{{ step.status }}`, which refer to the
-    workflow. A failing handler fails the pipeline.
+    `on_success` and `on_failure` steps run in parallel after the pipeline finishes, depending
+    on its result. They can use `{{ step.name }}` (the workflow's name) and `{{ step.outcome }}`.
+    A failing handler fails the pipeline.
 
-    `status` contexts (on the pipeline, stages, and blocks) are posted by `status_reporter`, an
-    ordinary block that makes the API call. It reads `{{ status.context }}`, `{{ status.state }}`
+    `status` contexts (on the pipeline, stages, and steps) are posted by `status_reporter`, an
+    ordinary action that makes the API call. It reads `{{ status.context }}`, `{{ status.state }}`
     ("pending", "success", "failure", "error"), and `{{ status.description }}`, and the commit
     from the required `repo` and `sha` params.
 
@@ -230,17 +245,22 @@ class Pipeline(_Model):
     name: Name
     params: list[Param] = []
     stages: Annotated[list[Stage], Field(min_length=1)]
-    on_success: list[Block] = []
-    on_failure: list[Block] = []
+    on_success: list[Step] = []
+    on_failure: list[Step] = []
     status: str | None = None
-    status_reporter: Block | None = None
+    status_reporter: Action | None = None
     triggers: list[Trigger] = []
 
     @property
     def status_contexts(self) -> list[str]:
         """Every commit-status context, in pipeline order."""
-        steps = [step for stage in self.stages for step in (stage, *stage.blocks)]
-        return [s.status for s in (self, *steps) if s.status is not None]
+        nodes = [node for stage in self.stages for node in (stage, *stage.steps)]
+        return [n.status for n in (self, *nodes) if n.status is not None]
+
+    @field_validator("on_success", "on_failure", mode="before")
+    @classmethod
+    def _wrap_handlers(cls, items: object) -> object:
+        return _as_steps(items)
 
     @model_validator(mode="after")
     def _check_unique_names(self) -> Self:
@@ -285,10 +305,6 @@ class Pipeline(_Model):
             return self
         if self.status_reporter is None:
             raise ValueError(f"pipeline {self.name!r}: status contexts need a status_reporter")
-        if not _is_plain(self.status_reporter):
-            raise ValueError(
-                f"pipeline {self.name!r}: the status_reporter cannot set when, status, or handlers"
-            )
         required = {p.name for p in self.params if p.required}
         if not {"repo", "sha"} <= required:
             raise ValueError(

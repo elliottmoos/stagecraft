@@ -7,7 +7,7 @@ class LoadError(StagecraftError):
 
 
 class CompileError(StagecraftError):
-    """A pipeline cannot be compiled. The message names the pipeline, stage, and block."""
+    """A pipeline cannot be compiled. The message names the pipeline, stage, and step."""
 
 
 class SerializeError(StagecraftError):

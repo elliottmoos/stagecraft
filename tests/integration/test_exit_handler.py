@@ -4,9 +4,9 @@ proves the status reached it."""
 
 import pytest
 
-from stagecraft.spec import Pipeline, Stage
+from stagecraft.spec import Pipeline, Stage, Step
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 from fixtures.pipelines import handlers
 from support import nodes_by_name, unique_name
 
@@ -67,8 +67,8 @@ def test_terminated_workflow_runs_no_handlers(argo):
 def test_failing_handler_fails_the_pipeline(argo):
     pipeline = Pipeline(
         name=unique_name("failing-handler"),
-        stages=[Stage("run", [Shell(name="work", script="true")])],
-        on_success=[Shell(name="notify", script="exit 1")],
+        stages=[Stage("run", [Step("work", Shell(script="true"))])],
+        on_success=[Step("notify", Shell(script="exit 1"))],
     )
 
     workflow = argo.run(pipeline)

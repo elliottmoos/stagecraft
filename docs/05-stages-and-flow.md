@@ -1,19 +1,19 @@
 # 5. Stages, params, and conditions
 
-With blocks and values in hand, this chapter is about the pipeline's shape: how stages run, how
+With actions and values in hand, this chapter is about the pipeline's shape: how stages run, how
 a run gets its inputs, and how to make steps conditional.
 
 ## How stages run
 
 - **Stages run in order.** A stage starts when the one before it has finished successfully.
-- **Blocks in a stage run in parallel.** They start together.
-- **A failing block fails its stage, and the pipeline.** Blocks already running in that stage
+- **Steps in a stage run in parallel.** They start together.
+- **A failing step fails its stage, and the pipeline.** Steps already running in that stage
   keep running; later stages don't start (the Argo UI shows them as Omitted).
 
-Group blocks into the same stage when they don't depend on each other (lint and unit tests), and
+Group steps into the same stage when they don't depend on each other (lint and unit tests), and
 into later stages when they do (build the image after the tests pass).
 
-Stage names follow the same rules as block names: lowercase DNS labels, unique in the pipeline.
+Stage names follow the same rules as step names: lowercase DNS labels, unique in the pipeline.
 
 ## Params: per-run inputs
 
@@ -29,7 +29,7 @@ Param("deploy", default="false", enum=["true", "false"], description="Deploy to 
 - Params become the Argo UI's submit form, with descriptions and drop-downs for enums.
 - Param values are always strings.
 
-Use a param in any block field with `{{ param.<name> }}`. Referring to a param that isn't
+Use a param in any action field with `{{ param.<name> }}`. Referring to a param that isn't
 declared fails the render.
 
 Params and Helm values answer different questions. A param is chosen **per run** ("deploy this
@@ -41,7 +41,7 @@ the person submitting a run shouldn't choose it, it isn't a param.
 `Make` gets a `variables` field for make variables. Placeholders work inside the dict's values,
 because Stagecraft replaces placeholders in every string a field contains:
 
-```python file=blocks.py
+```python file=actions.py
 import re
 
 from hera.workflows import Container
@@ -49,10 +49,10 @@ from hera.workflows.models import ResourceRequirements
 from pydantic import field_validator
 
 from stagecraft.context import CompileContext
-from stagecraft.spec import Block
+from stagecraft.spec import Action
 
 
-class Shell(Block):
+class Shell(Action):
     """Runs a shell script in the chart's shell image."""
 
     script: str
@@ -65,7 +65,7 @@ class Shell(Block):
         )
 
 
-class Make(Block):
+class Make(Action):
     """Runs one make target in the chart's build image, with the chart's build resources.
 
     `variables` are passed as make variables (NAME=value).
@@ -99,9 +99,9 @@ The pipeline gains params, a `prepare` stage (a stand-in for a real checkout), a
 stage that only runs when asked:
 
 ```python file=pipelines/service_ci.py
-from stagecraft.spec import Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from blocks import Make, Shell
+from actions import Make, Shell
 
 pipeline = Pipeline(
     name="service-ci",
@@ -112,21 +112,21 @@ pipeline = Pipeline(
         Param("deploy", default="false", enum=["true", "false"], description="Deploy to staging"),
     ],
     stages=[
-        Stage("prepare", [Shell(name="fetch", script="echo fetching {{ param.repo }}")]),
+        Stage("prepare", [Step("fetch", Shell(script="echo fetching {{ param.repo }}"))]),
         Stage(
             "verify",
             [
-                Make(name="lint", target="lint"),
-                Make(name="unit-tests", target="test"),
+                Step("lint", Make(target="lint")),
+                Step("unit-tests", Make(target="test")),
             ],
         ),
         Stage(
             "package",
-            [Make(name="image", target="image", variables={"PUSH": "{{ param.push }}"})],
+            [Step("image", Make(target="image", variables={"PUSH": "{{ param.push }}"}))],
         ),
         Stage(
             "deploy",
-            [Make(name="staging", target="deploy-staging")],
+            [Step("staging", Make(target="deploy-staging"))],
             when="{{ param.deploy }} == 'true'",
         ),
     ],
@@ -134,12 +134,12 @@ pipeline = Pipeline(
 ```
 
 In the rendered template, `{{ param.push }}` becomes the Argo expression
-`{{workflow.parameters.push}}`, so the image block runs `make image PUSH=true` when someone
+`{{workflow.parameters.push}}`, so the `image` step runs `make image PUSH=true` when someone
 submits with `push=true`.
 
 ## Conditions: `when`
 
-A stage or a block with `when` runs only if the condition is true; otherwise it's **skipped**.
+A stage or a step with `when` runs only if the condition is true; otherwise it's **skipped**.
 
 ```python
 Stage("deploy", [...], when="{{ param.deploy }} == 'true'")
@@ -160,7 +160,7 @@ Stagecraft only replaces its own placeholders (`param`, `values`, `step`, `statu
 `{{ ... }}` in a field is passed to Argo unchanged, so Argo's own variables work:
 
 ```python
-Shell(name="whoami", script="echo running {{workflow.name}}")
+Step("whoami", Shell(script="echo running {{workflow.name}}"))
 ```
 
 Use them sparingly: Stagecraft can't check them, and `argo lint` in the chart's CI is the first
@@ -168,9 +168,9 @@ place a typo would show up.
 
 ## Recap
 
-- Stages run in order; blocks in a stage run in parallel; a failure stops later stages.
+- Stages run in order; steps in a stage run in parallel; a failure stops later stages.
 - Params are per-run inputs and become the submit form; use them with `{{ param.x }}`.
-- `when` skips a stage or block; params inside it are quoted strings.
+- `when` skips a stage or step; params inside it are quoted strings.
 - Other `{{ ... }}` expressions go to Argo untouched.
 
 Next: [6. Handlers](06-handlers.md).

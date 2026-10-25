@@ -1,4 +1,4 @@
-"""Stagecraft: CI/CD pipelines as stages of blocks, compiled to Argo Workflows templates."""
+"""Stagecraft: CI/CD pipelines as stages of steps, compiled to Argo Workflows templates."""
 
 from importlib.metadata import version
 

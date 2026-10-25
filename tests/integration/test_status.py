@@ -4,7 +4,7 @@ import itertools
 
 import pytest
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 from fixtures.pipelines import status
 from support import unique_name
 
@@ -70,7 +70,7 @@ def test_failing_reporter_never_fails_the_pipeline(argo):
     broken = status.pipeline.model_copy(
         update={
             "name": unique_name("broken-reporter"),
-            "status_reporter": Shell(name="report", script="exit 1"),
+            "status_reporter": Shell(script="exit 1"),
         }
     )
 
@@ -82,7 +82,7 @@ def test_failing_reporter_never_fails_the_pipeline(argo):
     assert calls and all(n["phase"] in ("Failed", "Skipped") for n in calls)
 
 
-def test_stopped_pipeline_reports_failure_except_for_the_running_block(argo):
+def test_stopped_pipeline_reports_failure_except_for_the_running_step(argo):
     argo.install([status.pipeline])
     workflow = argo.submit(status.pipeline.name, {**COMMIT, "sleep": "120"})
     argo.wait_for_running_pod(workflow, "unit-tests")
@@ -94,5 +94,5 @@ def test_stopped_pipeline_reports_failure_except_for_the_running_block(argo):
     assert reports(finished)["ci/pipeline"][-1] == FAILURE
     assert reports(finished)["ci/verify"][-1] == FAILURE
     # Known gap, pinned so an Argo upgrade that changes it is noticed: `argo stop` does not run
-    # the exit hook of a block that was running, so its context stays pending until a re-run.
+    # the exit hook of a step that was running, so its context stays pending until a re-run.
     assert reports(finished)["ci/unit-tests"] == [PENDING]

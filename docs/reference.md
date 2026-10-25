@@ -6,9 +6,9 @@ Everything in one place. The [guide](README.md) explains each item in context.
 
 | Import | What |
 |---|---|
-| `from stagecraft.spec import Pipeline, Stage, Block, Param, Trigger` | The authoring models |
-| `from stagecraft.context import CompileContext` | The `ctx` passed to `Block.compile` |
-| `from stagecraft.contract import ValuesContract` | A values contract, for block tests |
+| `from stagecraft.spec import Pipeline, Stage, Step, Action, Param, Trigger` | The authoring models |
+| `from stagecraft.context import CompileContext` | The `ctx` passed to `Action.compile` |
+| `from stagecraft.contract import ValuesContract` | A values contract, for action tests |
 | `from stagecraft.compile import compile_pipeline, compile_triggers` | Compile in tests |
 | `from stagecraft.errors import CompileError` | Raised for contract and composition errors at compile time |
 | `from hera.workflows import Container, Script, Env, SecretEnv, ...` | What `compile` returns (Hera 7.1.0) |
@@ -20,37 +20,44 @@ Everything in one place. The [guide](README.md) explains each item in context.
 | `name` | str | required | DNS label; unique among pipelines; the `WorkflowTemplate`'s name |
 | `params` | list[Param] | `[]` | Unique names |
 | `stages` | list[Stage] | required | At least one; unique names; run in order |
-| `on_success`, `on_failure` | list[Block] | `[]` | Run after the run ends; a failure here fails the run |
+| `on_success`, `on_failure` | list[Step \| Action] | `[]` | Run after the run ends; a failure here fails the run |
 | `status` | str | None | Commit-status context for the whole run |
-| `status_reporter` | Block | None | Required if any step has a status |
+| `status_reporter` | Action | None | Required if anything has a status; a bare action, not a `Step` |
 | `triggers` | list[Trigger] | `[]` | Unique names |
 
 Statuses also require params `repo` and `sha`, both `required=True`. Status contexts are unique
 across the pipeline.
 
-## `Stage(name, blocks, /, ...)`
+## `Stage(name, steps, /, ...)`
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `name` | str | required (positional) | DNS label |
-| `blocks` | list[Block] | required (positional) | At least one; unique block names; run in parallel |
+| `steps` | list[Step \| Action] | required (positional) | At least one; unique step names; run in parallel |
 | `when` | str | None | Argo condition; `{{ param.x }}` is quoted inside it |
 | `status` | str | None | Commit-status context |
-| `on_success`, `on_failure`, `finally_` | list[Block] | `[]` | Handlers |
+| `on_success`, `on_failure`, `finally_` | list[Step \| Action] | `[]` | Handlers |
 
-## `Block`
+Wherever a list takes `Step | Action`, a bare action is a step named after its class in kebab case
+(`GitHubStatus` is `git-hub-status`).
 
-Subclass it, add fields, and implement `compile(self, ctx: CompileContext) -> Container | Script`.
+## `Step(name, action, /, ...)`
 
-| Inherited field | Type | Default | Notes |
+| Field | Type | Default | Notes |
 |---|---|---|---|
-| `name` | str | kebab-case class name | DNS label; unique within its stage or handler list |
+| `name` | str | required (positional) | DNS label; unique within its stage or handler list |
+| `action` | Action | required (positional) | What runs |
 | `when` | str | None | As for stages |
 | `status` | str | None | As for stages |
-| `on_success`, `on_failure`, `finally_` | list[Block] | `[]` | Handlers |
+| `on_success`, `on_failure`, `finally_` | list[Step \| Action] | `[]` | Handlers |
 
-Handler blocks and the status reporter can't set `when`, `status`, or handlers. Each block runs
-in its own pod; no files are shared between blocks.
+Handler steps can't set `when`, `status`, or handlers. Each step runs in its own pod; no files
+are shared between steps.
+
+## `Action`
+
+Subclass it, add fields, and implement `compile(self, ctx: CompileContext) -> Container | Script`.
+It has no fields of its own.
 
 ## `Param(name, /, ...)`
 
@@ -85,12 +92,12 @@ identifier keys.
 
 | Placeholder | Allowed in | Becomes |
 |---|---|---|
-| `{{ param.x }}` | block fields, `when` | `{{workflow.parameters.x}}`; quoted in `when` |
-| `{{ values.a.b }}` | block fields, `when`, trigger params | A Helm expression for `.Values.a.b` |
-| `{{ step.name }}`, `{{ step.status }}` | handler block fields | The step's path and outcome (stage and block handlers), or the run's name and status (pipeline handlers) |
+| `{{ param.x }}` | action fields, `when` | `{{workflow.parameters.x}}`; quoted in `when` |
+| `{{ values.a.b }}` | action fields, `when`, trigger params | A Helm expression for `.Values.a.b` |
+| `{{ step.name }}`, `{{ step.outcome }}` | handler action fields | The path (`stage` or `stage/step`), or the run's name in pipeline handlers; and `succeeded` or `failed` |
 | `{{ status.context }}`, `{{ status.state }}`, `{{ status.description }}` | `status_reporter` fields | The report being posted |
 
-"Block fields" means every string a block's fields contain, including inside lists, dicts, and
+"Action fields" means every string an action's fields contain, including inside lists, dicts, and
 nested models, but not strings created in `compile`. Names, `status` contexts, param fields, and
 trigger schedules and time zones are literal. Any other `{{ ... }}` is passed to Argo unchanged;
 a lone `{{` or `}}` fails the render.
@@ -111,8 +118,8 @@ Values always render as strings.
 |---|---|
 | Entrypoint DAG | `main` |
 | A stage's DAG | `<stage>` |
-| A block | `<stage>-<block>` |
-| A step's handler DAG / a handler | `<stage>[-<block>]-on-exit` / `<stage>[-<block>]-<on-success\|on-failure\|finally>-<handler>[-succeeded\|-failed]` |
+| A step | `<stage>-<step>` |
+| A step's handler DAG / a handler | `<stage>[-<step>]-on-exit` / `<stage>[-<step>]-<on-success\|on-failure\|finally>-<handler>[-succeeded\|-failed]` |
 | Pipeline handlers | `on-exit`, `on-success-<handler>`, `on-failure-<handler>` |
 | Status reporting | `status-report`, `status-reporter` |
 | A trigger's `CronWorkflow` | `<pipeline>-<trigger>` |
@@ -131,7 +138,7 @@ Two generated names colliding fails the render.
 
 `<paths>` are pipeline files or directories (their `*.py` files, not recursive, skipping names
 starting with `_`). Pipelines are the module-level `Pipeline` objects; their names must be unique.
-Run from the project root: pipeline files import blocks relative to the working directory.
+Run from the project root: pipeline files import actions relative to the working directory.
 
 ## Targets
 

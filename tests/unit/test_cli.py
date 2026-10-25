@@ -16,7 +16,7 @@ TESTS = Path(__file__).parents[1]
 VALUES = "--values-schema=fixtures/chart/values.schema.json"
 
 BROKEN = """
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 from stagecraft.spec import Pipeline, Stage
 
 pipeline = Pipeline(name="broken", stages=[Stage("s", [Shell(script="{{ param.nope }}")])])
@@ -25,7 +25,7 @@ pipeline = Pipeline(name="broken", stages=[Stage("s", [Shell(script="{{ param.no
 
 @pytest.fixture(autouse=True)
 def in_tests_dir(monkeypatch):
-    # Pipeline files import their blocks relative to the working directory, as in a pipelines repo.
+    # Pipeline files import their actions relative to the working directory, as in a pipelines repo.
     monkeypatch.chdir(TESTS)
 
 
@@ -67,7 +67,7 @@ def test_render_writes_nothing_when_any_pipeline_fails(tmp_path):
     )
 
     assert result.exit_code == 1
-    assert "pipeline 'broken', stage 's', block 'shell': undeclared param 'nope'" in result.output
+    assert "pipeline 'broken', stage 's', step 'shell': undeclared param 'nope'" in result.output
     assert not out.exists()
 
 
@@ -107,7 +107,7 @@ def test_check_fails_like_render(tmp_path):
     result = CliRunner().invoke(app, ["check", str(broken), VALUES])
 
     assert result.exit_code == 1
-    assert "pipeline 'broken', stage 's', block 'shell': undeclared param 'nope'" in result.output
+    assert "pipeline 'broken', stage 's', step 'shell': undeclared param 'nope'" in result.output
 
 
 def test_graph_prints_a_mermaid_diagram():

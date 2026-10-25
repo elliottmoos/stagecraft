@@ -1,15 +1,12 @@
-"""Commit statuses on pipeline, stage, and block, with a fake reporter that only echoes."""
+"""Commit statuses on pipeline, stage, and step, with a fake reporter that only echoes."""
 
-from stagecraft.spec import Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 
 REPORTER = Shell(
-    name="report",
-    script=(
-        'echo "{{ status.context }}={{ status.state }} ({{ status.description }})'
-        ' for {{ param.repo }}@{{ param.sha }}"'
-    ),
+    script='echo "{{ status.context }}={{ status.state }} ({{ status.description }})'
+    ' for {{ param.repo }}@{{ param.sha }}"'
 )
 
 pipeline = Pipeline(
@@ -27,10 +24,10 @@ pipeline = Pipeline(
         Stage(
             "verify",
             [
-                Shell(name="lint", script="true"),
-                Shell(
-                    name="unit-tests",
-                    script='sleep {{ param.sleep }}; test "{{ param.fail }}" != true',
+                Step("lint", Shell(script="true")),
+                Step(
+                    "unit-tests",
+                    Shell(script='sleep {{ param.sleep }}; test "{{ param.fail }}" != true'),
                     status="ci/unit-tests",
                 ),
             ],
@@ -38,7 +35,7 @@ pipeline = Pipeline(
         ),
         Stage(
             "deploy",
-            [Shell(name="staging", script="true")],
+            [Step("staging", Shell(script="true"))],
             when="{{ param.deploy }} == 'true'",
             status="ci/deploy",
         ),

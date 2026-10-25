@@ -81,7 +81,7 @@ spec:
     name: verify-lint-on-exit
   - container:
       args:
-      - test "verify/lint" = verify/lint && test "Succeeded" = Succeeded
+      - test "verify/lint" = verify/lint && test "succeeded" = succeeded
       command:
       - sh
       - -c
@@ -112,7 +112,7 @@ spec:
     name: verify-unit-tests-on-exit
   - container:
       args:
-      - test "verify/unit-tests" = verify/unit-tests && test "Failed" = Failed
+      - test "verify/unit-tests" = verify/unit-tests && test "failed" = failed
       command:
       - sh
       - -c
@@ -120,7 +120,7 @@ spec:
     name: verify-unit-tests-on-failure-notify
   - container:
       args:
-      - echo "Succeeded"
+      - echo "succeeded"
       command:
       - sh
       - -c
@@ -128,7 +128,7 @@ spec:
     name: verify-unit-tests-finally-upload-reports-succeeded
   - container:
       args:
-      - echo "Failed"
+      - echo "failed"
       command:
       - sh
       - -c
@@ -151,7 +151,7 @@ spec:
     name: verify-on-exit
   - container:
       args:
-      - test "verify" = verify && test "Failed" = Failed
+      - test "verify" = verify && test "failed" = failed
       command:
       - sh
       - -c
@@ -159,7 +159,7 @@ spec:
     name: verify-on-failure-notify
   - container:
       args:
-      - echo "verify Succeeded"
+      - echo "verify succeeded"
       command:
       - sh
       - -c
@@ -167,7 +167,7 @@ spec:
     name: verify-finally-cleanup-succeeded
   - container:
       args:
-      - echo "verify Failed"
+      - echo "verify failed"
       command:
       - sh
       - -c
@@ -200,7 +200,7 @@ spec:
     name: deploy-on-exit
   - container:
       args:
-      - echo "Succeeded"
+      - echo "succeeded"
       command:
       - sh
       - -c
@@ -208,7 +208,7 @@ spec:
     name: deploy-finally-report-succeeded
   - container:
       args:
-      - echo "Failed"
+      - echo "failed"
       command:
       - sh
       - -c

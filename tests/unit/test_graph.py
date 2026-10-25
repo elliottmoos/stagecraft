@@ -1,15 +1,15 @@
 from stagecraft.graph import mermaid
-from stagecraft.spec import Param, Pipeline, Stage, Trigger
+from stagecraft.spec import Param, Pipeline, Stage, Step, Trigger
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 
 
-def test_stages_are_ordered_subgraphs_of_blocks():
+def test_stages_are_ordered_subgraphs_of_steps():
     pipeline = Pipeline(
         name="p",
         stages=[
-            Stage("prepare", [Shell(name="clone", script="")]),
-            Stage("verify", [Shell(name="lint", script=""), Shell(name="tests", script="")]),
+            Stage("prepare", [Step("clone", Shell(script=""))]),
+            Stage("verify", [Step("lint", Shell(script="")), Step("tests", Shell(script=""))]),
         ],
     )
 
@@ -38,11 +38,11 @@ def test_labels_show_when_and_status():
             Param("sha", required=True),
         ],
         status="ci/p",
-        status_reporter=Shell(name="report", script=""),
+        status_reporter=Shell(script=""),
         stages=[
             Stage(
                 "deploy",
-                [Shell(name="apply", script="", status="ci/apply")],
+                [Step("apply", Shell(script=""), status="ci/apply")],
                 when="{{ param.deploy }} == 'true'",
             )
         ],
@@ -56,18 +56,18 @@ def test_labels_show_when_and_status():
 
 
 def test_handlers_hang_off_their_step_with_dotted_edges():
-    alert = Shell(name="alert", script="")
+    alert = Step("alert", Shell(script=""))
     pipeline = Pipeline(
         name="p",
         stages=[
             Stage(
                 "verify",
-                [Shell(name="tests", script="", finally_=[Shell(name="upload", script="")])],
+                [Step("tests", Shell(script=""), finally_=[Step("upload", Shell(script=""))])],
                 on_failure=[alert],
             ),
-            Stage("package", [Shell(name="build", script="")]),
+            Stage("package", [Step("build", Shell(script=""))]),
         ],
-        on_success=[Shell(name="notify", script="")],
+        on_success=[Step("notify", Shell(script=""))],
     )
 
     assert mermaid(pipeline).splitlines()[-7:] == [

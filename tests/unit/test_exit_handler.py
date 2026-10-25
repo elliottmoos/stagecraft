@@ -5,7 +5,7 @@ from stagecraft.compile import compile_pipeline
 from stagecraft.errors import CompileError
 from stagecraft.spec import Pipeline, Stage
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 from fixtures.contract import CONTEXT
 from fixtures.pipelines import handlers, smoke
 
@@ -52,19 +52,22 @@ def test_handler_failures_are_not_suppressed():
     assert not any("continueOn" in t for t in tasks)
 
 
-def test_step_placeholders_in_pipeline_handlers_lower_to_the_workflow():
-    notify = template(manifest(handlers.pipeline), "on-success-notify")
+def test_step_placeholders_in_pipeline_handlers_are_the_workflow_name_and_fixed_outcome():
+    m = manifest(handlers.pipeline)
 
-    assert notify["container"]["args"] == [
-        'echo "{{workflow.name}}: {{workflow.status}}"; test "{{workflow.status}}" = Succeeded'
+    assert template(m, "on-success-notify")["container"]["args"] == [
+        'echo "{{workflow.name}}: succeeded"; test "succeeded" = succeeded'
+    ]
+    assert template(m, "on-failure-notify")["container"]["args"] == [
+        'echo "{{workflow.name}}: failed"; test "failed" = failed'
     ]
 
 
 def test_step_placeholders_are_rejected_outside_handlers():
-    pipeline = Pipeline(name="p", stages=[Stage("s", [Shell(script="echo {{ step.status }}")])])
+    pipeline = Pipeline(name="p", stages=[Stage("s", [Shell(script="echo {{ step.outcome }}")])])
 
     with pytest.raises(
-        CompileError, match=r"stage 's', block 'shell': '\{\{ step.status }}' is only available"
+        CompileError, match=r"stage 's', step 'shell': '\{\{ step.outcome }}' is only available"
     ):
         compile_pipeline(pipeline, CONTEXT)
 
@@ -79,10 +82,10 @@ def test_unknown_step_field_is_rejected():
 def test_handler_errors_name_the_handler_list():
     pipeline = pipeline_with(on_failure=[Shell(script="echo {{ param.nope }}")])
 
-    with pytest.raises(CompileError, match="pipeline 'p', on_failure block 'shell': undeclared"):
+    with pytest.raises(CompileError, match="pipeline 'p', on_failure step 'shell': undeclared"):
         compile_pipeline(pipeline, CONTEXT)
 
 
-def test_handler_block_names_must_be_unique_within_a_list():
-    with pytest.raises(ValidationError, match="on_success: duplicate block name 'shell'"):
+def test_handler_step_names_must_be_unique_within_a_list():
+    with pytest.raises(ValidationError, match="on_success: duplicate step name 'shell'"):
         pipeline_with(on_success=[Shell(script="a"), Shell(script="b")])

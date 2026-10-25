@@ -30,7 +30,7 @@ FENCE = re.compile(r"^```(\w+) file=(\S+)\n(.*?)^```", re.S | re.M)
 
 @pytest.fixture(autouse=True)
 def forget_project_modules(tmp_path):
-    """Each chapter's project has its own `blocks` module: forget the modules a test loaded
+    """Each chapter's project has its own `actions` module: forget the modules a test loaded
     from its project."""
     yield
     for name, module in list(sys.modules.items()):

@@ -1,47 +1,48 @@
-# 3. Blocks
+# 3. Actions
 
-Blocks are where your pipelines' real work is defined, and the one place you write code. This
-chapter covers what a block is made of, the rule that shapes every block design (fields versus
-`compile`), and how to test blocks.
+Actions are where your pipelines' real work is defined, and the one place you write code. This
+chapter covers what an action is made of, the rule that shapes every action design (fields versus
+`compile`), how steps name them, and how to test actions.
 
 ## Anatomy
 
 ```python
-class Make(Block):            # 1. a subclass of stagecraft.spec.Block
+class Make(Action):           # 1. a subclass of stagecraft.spec.Action
     """Runs one make target."""
 
-    target: str               # 2. fields: what an author can configure
+    target: str               # 2. fields: what a pipeline author can configure
 
-    def compile(self, ctx):   # 3. compile: the container this block runs as
+    def compile(self, ctx):   # 3. compile: the container this action runs as
         return Container(...)
 ```
 
-1. **A `Block` subclass.** Blocks are Pydantic models: fields are typed and validated, unknown
+1. **An `Action` subclass.** Actions are Pydantic models: fields are typed and validated, unknown
    arguments are rejected (a typo like `Make(taget="lint")` fails), and instances are immutable.
 2. **Fields.** Anything an author should be able to set. Use defaults generously so the common
    case is short.
 3. **`compile(self, ctx)`** returns one Hera `Container` or `Script`. Stagecraft names it, wires
    it into the workflow, and adds anything the pipeline asks for (handlers, statuses).
 
-Every block also inherits a few fields from `Block`, covered in later chapters: `name`, `when`,
-`status`, `on_success`, `on_failure`, and `finally_`.
+An action has only the fields you give it. Where it runs, under which name, and under which
+conditions belong to the `Step` that places it (`when`, `status`, and handlers, covered in later
+chapters), so they never collide with your fields.
 
-## A reusable block
+## A reusable action
 
 `Shell` from chapter 2 works, but a pipeline full of shell one-liners is hard to read and easy to
-get wrong. Purpose-built blocks name the intent and validate their inputs:
+get wrong. Purpose-built actions name the intent and validate their inputs:
 
-```python file=blocks.py
+```python file=actions.py
 import re
 
 from hera.workflows import Container
 from pydantic import field_validator
 
 from stagecraft.context import CompileContext
-from stagecraft.spec import Block
+from stagecraft.spec import Action
 
 
-class Shell(Block):
+class Shell(Action):
     """Runs a shell script in the chart's shell image."""
 
     script: str
@@ -54,7 +55,7 @@ class Shell(Block):
         )
 
 
-class Make(Block):
+class Make(Action):
     """Runs one make target in the chart's build image."""
 
     target: str
@@ -77,9 +78,9 @@ class Make(Block):
 The pipeline now reads as what it does:
 
 ```python file=pipelines/service_ci.py
-from stagecraft.spec import Pipeline, Stage
+from stagecraft.spec import Pipeline, Stage, Step
 
-from blocks import Make
+from actions import Make
 
 pipeline = Pipeline(
     name="service-ci",
@@ -87,11 +88,11 @@ pipeline = Pipeline(
         Stage(
             "verify",
             [
-                Make(name="lint", target="lint"),
-                Make(name="unit-tests", target="test"),
+                Step("lint", Make(target="lint")),
+                Step("unit-tests", Make(target="test")),
             ],
         ),
-        Stage("package", [Make(name="image", target="image")]),
+        Stage("package", [Step("image", Make(target="image"))]),
     ],
 )
 ```
@@ -122,20 +123,22 @@ images:
 }
 ```
 
-## Names
+## Steps and names
 
-- A block's name defaults to its class name in kebab case: `Make` is `make`, `GitHubStatus` is
-  `git-hub-status`.
-- Names must be unique within a stage, so two `Make` blocks in one stage each need `name=`.
+Actions have no names; steps do. `Step(name, action)` places an action in a stage:
+
+- A bare action in a stage is shorthand for a step named after its class in kebab case: `Make(...)`
+  is the step `make`, `GitHubStatus(...)` is `git-hub-status`.
+- Step names must be unique within a stage, so two `Make` actions in one stage need a `Step` each.
 - Names must be lowercase DNS labels (`a-z`, `0-9`, `-`, at most 63 characters).
-- The compiled template is named `<stage>-<block>`, for example `verify-lint`. That's the name you
+- The compiled template is named `<stage>-<step>`, for example `verify-lint`. That's the name you
   see in the Argo UI.
 
 ## What `compile` can return
 
 `compile` returns a Hera
 [`Container`](https://github.com/argoproj-labs/hera/tree/7.1.0) or `Script`, and Stagecraft
-passes it through, apart from setting its name. So a block can set anything Hera allows:
+passes it through, apart from setting its name. So an action can set anything Hera allows:
 environment variables, resource requests, retries, timeouts, a service account, node selectors,
 security contexts, volumes. For example:
 
@@ -143,7 +146,7 @@ security contexts, volumes. For example:
 from hera.workflows import Container, Env, RetryStrategy
 
 
-class Flaky(Block):
+class Flaky(Action):
     """Runs a command that sometimes fails for reasons outside our control."""
 
     command: list[str]
@@ -164,7 +167,7 @@ A `Script` runs inline source with an interpreter:
 from hera.workflows import Script
 
 
-class Python(Block):
+class Python(Action):
     """Runs a Python snippet."""
 
     source: str
@@ -173,13 +176,13 @@ class Python(Block):
         return Script(image=ctx.value("images.python", str), command=["python"], source=self.source)
 ```
 
-A block can set **container fields** (image, command, args, env, resources, working directory),
+An action can set **container fields** (image, command, args, env, resources, working directory),
 which describe the container itself, and **template fields** (retries, timeouts, service account,
 node selection), which describe the pod around it.
 
 Rules for `compile`:
 
-- **No I/O.** Don't read files, environment variables, or the network. A block's output must
+- **No I/O.** Don't read files, environment variables, or the network. An action's output must
   depend only on its fields and `ctx`, so a render is reproducible.
 - **No installation-specific literals.** Images, Secret names, registries, and resource sizes
   differ per environment: get them from `ctx` (chapter 4).
@@ -187,7 +190,7 @@ Rules for `compile`:
 
 ## Fields versus `compile`: where placeholders work
 
-Authors put **placeholders** such as `{{ param.sha }}` in block fields (chapter 5 introduces
+Authors put **placeholders** such as `{{ param.sha }}` in action fields (chapter 5 introduces
 them). Stagecraft replaces them in every string field, including inside lists, dicts, and nested
 models, **before** it calls `compile`. It does not look inside what `compile` returns.
 
@@ -195,12 +198,12 @@ So anything that should accept a placeholder must be a field. A placeholder writ
 `compile` would reach Argo unreplaced:
 
 ```python
-class Bad(Block):
+class Bad(Action):
     def compile(self, ctx):
         return Container(..., args=["echo {{ param.sha }}"])     # never replaced
 
 
-class Good(Block):
+class Good(Action):
     sha: str = "{{ param.sha }}"                               # replaced before compile
 
     def compile(self, ctx):
@@ -219,12 +222,12 @@ Two more consequences:
   value=self.sha)]` with a script that reads `$SHA` keeps the script literal and readable, and
   avoids quoting problems.
 
-## Testing blocks
+## Testing actions
 
-A block is a plain class, so test it with plain pytest. Give `compile` a small contract with just
-the values the block needs:
+An action is a plain class, so test it with plain pytest. Give `compile` a small contract with just
+the values the action needs:
 
-```python file=tests/test_blocks.py
+```python file=tests/test_actions.py
 import pytest
 from pydantic import ValidationError
 
@@ -232,7 +235,7 @@ from stagecraft.context import CompileContext
 from stagecraft.contract import ValuesContract
 from stagecraft.errors import CompileError
 
-from blocks import Make
+from actions import Make
 
 SCHEMA = {
     "type": "object",
@@ -267,20 +270,21 @@ def test_make_needs_the_build_image_from_the_chart():
         Make(target="lint").compile(empty)
 ```
 
-Calling `compile` directly skips placeholder replacement. To test how a block behaves inside a
+Calling `compile` directly skips placeholder replacement. To test how an action behaves inside a
 pipeline, compile a whole pipeline with `stagecraft.compile.compile_pipeline`, or run
 `stagecraft check` in CI.
 
-## Sharing blocks
+## Sharing actions
 
-Blocks are ordinary Python. Once several pipelines repos want the same blocks, move them into a
-package (a block library), version it, and depend on it like any other library.
+Actions are ordinary Python. Once several pipelines repos want the same actions, move them into a
+package (an action library), version it, and depend on it like any other library.
 
 ## Recap
 
-- A block is a validated Pydantic model whose `compile` returns one Hera container.
+- An action is a validated Pydantic model whose `compile` returns one Hera container.
+- A step places an action in a stage under a name; a bare action is named after its class.
 - `compile` can set anything Hera allows; it must be pure and get installation details from `ctx`.
 - Placeholders work in fields, not in what `compile` returns. Design fields accordingly.
-- Test blocks by calling `compile` with a small contract.
+- Test actions by calling `compile` with a small contract.
 
 Next: [4. Helm values and the contract](04-values.md).

@@ -1,43 +1,47 @@
 # 6. Handlers
 
 Some work belongs *after* a step rather than in it: telling a channel the tests failed, uploading
-reports whatever the outcome, cleaning up. Handlers are blocks that run when a step finishes.
+reports whatever the outcome, cleaning up. Handlers are steps that run when a step, a stage, or
+the pipeline finishes.
 
 ## Three kinds
 
 | Field | Runs when the step | Available on |
 |---|---|---|
-| `on_success` | succeeds | blocks, stages, the pipeline |
-| `on_failure` | fails (or errors) | blocks, stages, the pipeline |
-| `finally_` | finishes either way | blocks, stages |
+| `on_success` | succeeds | steps, stages, the pipeline |
+| `on_failure` | fails (or errors) | steps, stages, the pipeline |
+| `finally_` | finishes either way | steps, stages |
 
-Each takes a list of ordinary blocks, which run in parallel. A handler is any block, the same
-kind you'd put in a stage.
+Each takes a list of actions, which run in parallel: any action, the same kind you'd put in a
+stage. As in a stage, a bare action is named after its class; wrap it in `Step` to name it.
 
 ```python
 Stage("verify", [...], on_failure=[Notify(message="verify failed")])
-Make(name="unit-tests", target="test", finally_=[UploadReports()])
+Step("unit-tests", Make(target="test"), finally_=[UploadReports()])
 Pipeline(..., on_success=[...], on_failure=[...])
 ```
 
 ## What a handler knows: `{{ step.* }}`
 
-Inside a handler's fields, two placeholders describe the step it's attached to:
+Inside a handler's fields, two placeholders describe what it's attached to:
 
-| Placeholder | In a stage or block handler | In a pipeline handler |
+| Placeholder | In a stage or step handler | In a pipeline handler |
 |---|---|---|
-| `{{ step.name }}` | the step's path: `verify` or `verify/unit-tests` | the run's name, such as `service-ci-x7k2p` |
-| `{{ step.status }}` | `Succeeded` or `Failed` | the run's status: `Succeeded`, `Failed`, or `Error` |
+| `{{ step.name }}` | the path: `verify` or `verify/unit-tests` | the run's name, such as `service-ci-x7k2p` |
+| `{{ step.outcome }}` | `succeeded` or `failed` | the run's outcome: `succeeded` or `failed` |
+
+Outcomes are Stagecraft's own words, not Argo's: an Argo `Error` (for example, a pod that couldn't
+start) counts as `failed`. A `finally_` handler sees whichever outcome happened.
 
 `{{ step.* }}` only works in handlers; anywhere else it fails the render. Argo doesn't expose a
 failed step's exit code or error message to handlers, so neither does Stagecraft.
 
 ## Growing the example
 
-A `Notify` block posts a message to a chat channel. Here it only prints the message, standing in
+A `Notify` action posts a message to a chat channel. Here it only prints the message, standing in
 for whatever chat API you use. Its channel defaults to a Helm value, so authors rarely set it:
 
-```python file=blocks.py
+```python file=actions.py
 import re
 
 from hera.workflows import Container, Env
@@ -45,10 +49,10 @@ from hera.workflows.models import ResourceRequirements
 from pydantic import field_validator
 
 from stagecraft.context import CompileContext
-from stagecraft.spec import Block
+from stagecraft.spec import Action
 
 
-class Shell(Block):
+class Shell(Action):
     """Runs a shell script in the chart's shell image."""
 
     script: str
@@ -61,7 +65,7 @@ class Shell(Block):
         )
 
 
-class Make(Block):
+class Make(Action):
     """Runs one make target in the chart's build image, with the chart's build resources.
 
     `variables` are passed as make variables (NAME=value).
@@ -91,7 +95,7 @@ class Make(Block):
         )
 
 
-class Notify(Block):
+class Notify(Action):
     """Posts a message to a chat channel (this stand-in prints it)."""
 
     message: str
@@ -112,9 +116,9 @@ breaking the script (chapter 3).
 The pipeline tells the channel when verification fails, and how every run ends:
 
 ```python file=pipelines/service_ci.py
-from stagecraft.spec import Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from blocks import Make, Notify, Shell
+from actions import Make, Notify, Shell
 
 pipeline = Pipeline(
     name="service-ci",
@@ -125,26 +129,26 @@ pipeline = Pipeline(
         Param("deploy", default="false", enum=["true", "false"], description="Deploy to staging"),
     ],
     stages=[
-        Stage("prepare", [Shell(name="fetch", script="echo fetching {{ param.repo }}")]),
+        Stage("prepare", [Step("fetch", Shell(script="echo fetching {{ param.repo }}"))]),
         Stage(
             "verify",
             [
-                Make(name="lint", target="lint"),
-                Make(name="unit-tests", target="test"),
+                Step("lint", Make(target="lint")),
+                Step("unit-tests", Make(target="test")),
             ],
             on_failure=[Notify(message="{{ step.name }} failed for {{ param.sha }}")],
         ),
         Stage(
             "package",
-            [Make(name="image", target="image", variables={"PUSH": "{{ param.push }}"})],
+            [Step("image", Make(target="image", variables={"PUSH": "{{ param.push }}"}))],
         ),
         Stage(
             "deploy",
-            [Make(name="staging", target="deploy-staging")],
+            [Step("staging", Make(target="deploy-staging"))],
             when="{{ param.deploy }} == 'true'",
         ),
     ],
-    on_failure=[Notify(message="{{ step.name }} ended {{ step.status }}")],
+    on_failure=[Notify(message="{{ step.name }} {{ step.outcome }}")],
 )
 ```
 
@@ -201,8 +205,8 @@ notify:
 
 - **A step skipped by `when` runs no handlers**, not even `finally_`.
 - **A step that never starts** (because an earlier stage failed) runs no handlers either.
-- **Stopping a run** (`argo stop`) runs pipeline and stage handlers with a `Failed` status, but
-  not the handlers of a block that was still running. Terminating it (`argo terminate`) runs
+- **Stopping a run** (`argo stop`) runs pipeline and stage handlers as `failed`, but not the
+  handlers of a step that was still running. Terminating it (`argo terminate`) runs
   none.
 - Handlers run after the step finishes. Don't assume a stage's handlers finish before the next
   stage starts.
@@ -211,21 +215,21 @@ notify:
 
 - **A failing pipeline handler fails the pipeline**, even if every stage succeeded. Handler
   failures are unexpected, and a build that couldn't report its result shouldn't look green.
-- **A failing stage or block handler** shows as failed in the Argo UI but **doesn't** fail the
+- **A failing stage or step handler** shows as failed in the Argo UI but **doesn't** fail the
   pipeline. That's an Argo limitation, not a choice: hooks on individual steps can't fail a
   workflow.
 
-## Rules for handler blocks
+## Rules for handlers
 
-A handler only runs; it can't be a step of its own. So a handler block can't set `when`,
-`status`, or its own handlers. Handler names must be unique within each list
-(`on_failure=[Notify(...), Notify(name="page", ...)]`).
+A handler only runs. So a handler `Step` can set a name but not `when`, `status`, or its own
+handlers. Handler names must be unique within each list
+(`on_failure=[Notify(...), Step("page", Notify(...))]`).
 
 ## Recap
 
-- `on_success`, `on_failure`, and `finally_` attach ordinary blocks to a block, a stage, or (the
-  first two) the pipeline.
-- `{{ step.name }}` and `{{ step.status }}` tell a handler what happened.
+- `on_success`, `on_failure`, and `finally_` attach actions to a step, a stage, or (the first two)
+  the pipeline.
+- `{{ step.name }}` and `{{ step.outcome }}` tell a handler what happened.
 - Skipped and never-started steps run no handlers. Only pipeline handler failures fail the
   pipeline.
 

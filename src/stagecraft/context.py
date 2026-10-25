@@ -1,7 +1,7 @@
-"""CompileContext: the one object the compiler passes to every block. See DESIGN.md section 8.
+"""CompileContext: the one object the compiler passes to every action. See DESIGN.md section 8.
 
-Blocks get Helm values only through `CompileContext.value`, never by writing Helm syntax. A value
-reference is returned as a marker string, so it fits any string field a block builds; the
+Actions get Helm values only through `CompileContext.value`, never by writing Helm syntax. A value
+reference is returned as a marker string, so it fits any string field an action builds; the
 serializer turns markers into Helm expressions after escaping Argo expressions. A marker records
 whether the value is a string or another scalar, which Helm must print with `toJson`.
 """
@@ -31,7 +31,7 @@ class CompileContext:
     def value(self, path: str, expected: type | None = None) -> str:
         """Reference the required Helm value at `path` (dotted, relative to the values prefix).
 
-        `expected` is the Python type the block uses the value as: str, int, float, or bool.
+        `expected` is the Python type the action uses the value as: str, int, float, or bool.
         None accepts any scalar, which is how `{{ values.a.b }}` placeholders are checked.
         Raises CompileError if the contract does not guarantee a value of that type.
         """

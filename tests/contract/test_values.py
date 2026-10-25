@@ -9,7 +9,7 @@ from stagecraft.errors import CompileError
 from stagecraft.serialize import serialize
 from stagecraft.spec import Pipeline, Stage
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 from fixtures.contract import CONTEXT
 
 SCHEMA = {
@@ -110,23 +110,23 @@ def test_structured_expected_types_are_not_supported_yet():
         context().value("obj", dict)
 
 
-def test_pipeline_placeholder_failure_names_pipeline_stage_block_and_path():
+def test_pipeline_placeholder_failure_names_pipeline_stage_step_and_path():
     pipeline = Pipeline(
         name="p", stages=[Stage("s", [Shell(script="echo {{ values.notify.nope }}")])]
     )
 
     with pytest.raises(
         CompileError,
-        match=r"pipeline 'p', stage 's', block 'shell': value 'notify\.nope' is not declared",
+        match=r"pipeline 'p', stage 's', step 'shell': value 'notify\.nope' is not declared",
     ):
         compile_pipeline(pipeline, CONTEXT)
 
 
-def test_block_reference_failure_names_the_block():
+def test_action_reference_failure_names_the_step():
     empty = CompileContext(ValuesContract({"type": "object", "properties": {}}))
     pipeline = Pipeline(name="p", stages=[Stage("s", [Shell(script="true")])])
 
-    with pytest.raises(CompileError, match=r"block 'shell': value 'images\.shell' is not declared"):
+    with pytest.raises(CompileError, match=r"step 'shell': value 'images\.shell' is not declared"):
         compile_pipeline(pipeline, empty)
 
 

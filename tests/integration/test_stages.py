@@ -1,13 +1,15 @@
 import pytest
 
-from fixtures.blocks import Shell
+from stagecraft.spec import Step
+
+from fixtures.actions import Shell
 from fixtures.pipelines import smoke
 from support import nodes_by_name
 
 pytestmark = pytest.mark.integration
 
 
-def test_stages_run_in_order_and_blocks_in_a_stage_run_in_parallel(argo):
+def test_stages_run_in_order_and_steps_in_a_stage_run_in_parallel(argo):
     workflow = argo.run(smoke.pipeline, {"repo": "example/repo"})
 
     assert workflow["status"]["phase"] == "Succeeded"
@@ -15,32 +17,32 @@ def test_stages_run_in_order_and_blocks_in_a_stage_run_in_parallel(argo):
     prepare, verify, package = nodes["prepare"], nodes["verify"], nodes["package"]
     assert prepare["finishedAt"] <= verify["startedAt"]
     assert verify["finishedAt"] <= package["startedAt"]
-    # Both verify blocks sleep 2s; they overlap only if they ran in parallel.
+    # Both verify steps sleep 2s; they overlap only if they ran in parallel.
     lint, unit_tests = nodes["lint"], nodes["unit-tests"]
     assert lint["startedAt"] < unit_tests["finishedAt"]
     assert unit_tests["startedAt"] < lint["finishedAt"]
 
 
-def test_param_placeholder_reaches_the_block(run_block):
-    workflow = run_block(
-        Shell(name="check", script='test "{{ param.repo }}" = example/repo'),
+def test_param_placeholder_reaches_the_action(run_step):
+    workflow = run_step(
+        Step("check", Shell(script='test "{{ param.repo }}" = example/repo')),
         params={"repo": "example/repo"},
     )
 
     assert workflow["status"]["phase"] == "Succeeded"
 
 
-def test_failing_block_fails_the_workflow(run_block):
-    workflow = run_block(Shell(name="fail", script="exit 3"))
+def test_failing_step_fails_the_workflow(run_step):
+    workflow = run_step(Step("fail", Shell(script="exit 3")))
 
     assert workflow["status"]["phase"] == "Failed"
     assert nodes_by_name(workflow)["fail"]["phase"] == "Failed"
 
 
-def test_helm_values_reach_the_block(run_block):
+def test_helm_values_reach_the_action(run_step):
     # The fixture chart's values.yaml sets notify.channel to "#ci-builds".
-    workflow = run_block(
-        Shell(name="check", script='test "{{ values.notify.channel }}" = "#ci-builds"')
+    workflow = run_step(
+        Step("check", Shell(script='test "{{ values.notify.channel }}" = "#ci-builds"'))
     )
 
     assert workflow["status"]["phase"] == "Succeeded"

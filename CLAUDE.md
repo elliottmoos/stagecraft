@@ -1,6 +1,6 @@
 # Stagecraft
 
-Python framework and CLI that compiles CI/CD pipelines (ordered stages of parallel blocks) into
+Python framework and CLI that compiles CI/CD pipelines (ordered stages of parallel steps) into
 Helm-compatible Argo Workflows `WorkflowTemplate` and `CronWorkflow` manifests, using Hera as the
 compiler. `DESIGN.md` is the spec; read the relevant section before changing behavior.
 `README.md` is the overview and `docs/` the step-by-step guide (`docs/reference.md` lists every
@@ -43,21 +43,21 @@ Facts confirmed by experiment or by `tests/integration`. Re-check them when bump
 - Task hooks: an expression hook on a **sub-DAG** task never fires if another task depends on
   it (pod tasks are fine). A task's `exit` hook always fires, and its arguments can read
   `{{tasks.<name>.status}}`, which expression-hook arguments can't for sub-DAG tasks. Hence
-  stage and block handlers run from one `exit` hook calling a `when`-guarded handler DAG.
+  stage and step handlers run from one `exit` hook calling a `when`-guarded handler DAG.
   `{{tasks.<name>.exitCode}}` doesn't resolve in hook arguments.
 - A failing task hook (`exit` or expression) does **not** fail the workflow. Accepted for stage
-  and block handlers; pipeline handlers (onExit) do fail it.
+  and step handlers; pipeline handlers (onExit) do fail it.
 - A task skipped by `when` fires none of its handlers.
 - `when` parses bare words: `true == 'true'` is false (boolean vs string). Stagecraft quotes
   param placeholders inside `when`.
-- `running` hooks are unreliable: one on an 8-second block never fired (it did on a 60-second
+- `running` hooks are unreliable: one on an 8-second step never fired (it did on a 60-second
   one). Don't use them for anything that must happen.
 - `exit` hooks don't fire for a task skipped by `when`.
 - `continueOn` is rejected by `argo lint` in any DAG template that uses `depends`.
 - A failed task counts as handled (the DAG can still succeed) only if a task depending on its
   failure actually runs.
-- `argo stop` doesn't run the `exit` hook of a block that was running (the stage's still runs).
-  A block-level commit status stays pending after a stop until the workflow is re-run.
+- `argo stop` doesn't run the `exit` hook of a step that was running (the stage's still runs).
+  A step-level commit status stays pending after a stop until the workflow is re-run.
 - `argo stop` runs exit handlers with `{{workflow.status}} == Failed`.
 - Helm applies a release's `CronWorkflow`s before its `WorkflowTemplate`s (Helm 4.1.0 sorts unknown
   kinds by name and creates one kind at a time; seen on kind). A new CronWorkflow
@@ -108,15 +108,15 @@ that way so tests never touch the user's current kube context.
 ## Rules
 
 - The compile layer stays pure: no I/O, no env reads, no globals.
-- Blocks get values only through `ctx.value(path, type)` in `Block.compile(ctx)`, or through
+- Actions get values only through `ctx.value(path, type)` in `Action.compile(ctx)`, or through
   `{{ values.a.b }}` placeholders in their fields. Both return a marker string that the serializer
   turns into `{{ .Values.a.b | quote }}` (strings) or `{{ .Values.a.b | toJson | quote }}`
   (numbers and booleans: Helm's `quote` prints 1000000 as "1e+06"). Secrets are value-referenced names (for example
   `SecretEnv(secret_name=ctx.value(...))`), never contents.
 - Only required, non-null, single-typed scalar values can be referenced (decided 2026-10-23).
-  Structured values (objects, arrays) and typed block inputs/outputs wait until a block needs them
-  (decided 2026-10-24).
-- Blocks never emit Helm syntax. Only the serializer does, and it escapes all Argo expressions in
+  Structured values (objects, arrays) wait until an action needs them (decided 2026-10-24); typed
+  action inputs and outputs come with artifacts (`DESIGN.md` section 16).
+- Actions never emit Helm syntax. Only the serializer does, and it escapes all Argo expressions in
   one pass.
 - A reference to a value missing from the contract, or of the wrong type, must fail rendering.
   Never silently default.
@@ -124,10 +124,14 @@ that way so tests never touch the user's current kube context.
   compiler.
 - Stagecraft never generates chart files or the values contract. The fixture chart under
   `tests/fixtures/` is test-only and never published.
-- There is no shared filesystem: each block runs in its own pod, and files will cross job
-  boundaries only as artifacts (decided 2026-10-25). Don't add volumes shared between blocks.
-- `DESIGN.md` section 16 is the target model for the next slices (actions and jobs, sources,
-  artifacts, the generated chart, conditions). Read it before changing the authoring model.
+- Actions hold only their own fields and `compile`; a `Step` places one in a stage with a name,
+  `when`, `status`, and handlers (decided 2026-10-25). Don't add step features to `Action`.
+- Handlers see Stagecraft outcomes (`{{ step.outcome }}`: `succeeded`, `failed`), never Argo
+  phases. The status reporter keeps host-style states (`success`, `failure`, `error`).
+- There is no shared filesystem: each step runs in its own pod, and files will cross step
+  boundaries only as artifacts (decided 2026-10-25). Don't add volumes shared between steps.
+- `DESIGN.md` section 16 is the target model for the next slices (sources, artifacts, the
+  generated chart, conditions). Read it before changing the authoring model.
 - Hera's API changes between versions, so check the pinned version's docs rather than guessing.
 - Don't generalize before two or three real pipelines exist. `DESIGN.md` section 15 lists the
   deferred features and what would justify each; update it when one is built or newly deferred.
@@ -144,10 +148,10 @@ that way so tests never touch the user's current kube context.
 ```
 src/stagecraft/   spec.py, context.py, contract.py, compile/, serialize/, graph.py, cli.py
 tests/unit/         plain functions, escaping, contract-validation logic
-tests/contract/     block contract and values-contract validation
+tests/contract/     action contract and values-contract validation
 tests/snapshots/    compile + rendered-template snapshots
 tests/integration/  kind + Argo behavior tests (marked `integration`)
-tests/fixtures/     minimal blocks, fixture schema, test-only fixture chart, CRD schemas
+tests/fixtures/     minimal actions, fixture schema, test-only fixture chart, CRD schemas
 docs/               user guide: numbered chapters (one cumulative example project) + reference
 ```
 

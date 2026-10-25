@@ -77,7 +77,7 @@ def graph(
         str | None, typer.Option(help="Pipeline to draw, when the paths hold several.")
     ] = None,
 ) -> None:
-    """Print a Mermaid diagram of a pipeline: its stages, blocks, conditions, handlers, and
+    """Print a Mermaid diagram of a pipeline: its stages, steps, conditions, handlers, and
     triggers."""
     with _errors():
         typer.echo(mermaid(_pick(load_pipelines(paths), pipeline)), nl=False)

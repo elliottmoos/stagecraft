@@ -1,9 +1,9 @@
 """Cron triggers: a nightly run with overridden params, and a second trigger whose param comes
 from a Helm value."""
 
-from stagecraft.spec import Param, Pipeline, Stage, Trigger
+from stagecraft.spec import Param, Pipeline, Stage, Step, Trigger
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 
 pipeline = Pipeline(
     name="triggers-ci",
@@ -13,7 +13,7 @@ pipeline = Pipeline(
         Param("channel", default="none"),
     ],
     stages=[
-        Stage("build", [Shell(name="echo", script='echo "{{ param.repo }} {{ param.mode }}"')]),
+        Stage("build", [Step("echo", Shell(script='echo "{{ param.repo }} {{ param.mode }}"'))]),
     ],
     triggers=[
         Trigger.cron(

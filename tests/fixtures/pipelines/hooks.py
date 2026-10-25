@@ -1,14 +1,16 @@
-"""Block and stage handlers plus `when`. Handlers fail unless they see the expected step name and
-status, so a Succeeded handler node proves its context arrived."""
+"""Step and stage handlers plus `when`. Handlers fail unless they see the expected step name and
+outcome, so a Succeeded handler node proves its context arrived."""
 
-from stagecraft.spec import Param, Pipeline, Stage
+from stagecraft.spec import Param, Pipeline, Stage, Step
 
-from fixtures.blocks import Shell
+from fixtures.actions import Shell
 
 
-def expect(handler: str, step_name: str, status: str) -> Shell:
-    script = f'test "{{{{ step.name }}}}" = {step_name} && test "{{{{ step.status }}}}" = {status}'
-    return Shell(name=handler, script=script)
+def expect(handler: str, step_name: str, outcome: str) -> Step:
+    script = (
+        f'test "{{{{ step.name }}}}" = {step_name} && test "{{{{ step.outcome }}}}" = {outcome}'
+    )
+    return Step(handler, Shell(script=script))
 
 
 pipeline = Pipeline(
@@ -21,26 +23,26 @@ pipeline = Pipeline(
         Stage(
             "verify",
             [
-                Shell(
-                    name="lint",
-                    script="true",
-                    on_success=[expect("notify", "verify/lint", "Succeeded")],
+                Step(
+                    "lint",
+                    Shell(script="true"),
+                    on_success=[expect("notify", "verify/lint", "succeeded")],
                 ),
-                Shell(
-                    name="unit-tests",
-                    script='test "{{ param.fail }}" != true',
-                    on_failure=[expect("notify", "verify/unit-tests", "Failed")],
-                    finally_=[Shell(name="upload-reports", script='echo "{{ step.status }}"')],
+                Step(
+                    "unit-tests",
+                    Shell(script='test "{{ param.fail }}" != true'),
+                    on_failure=[expect("notify", "verify/unit-tests", "failed")],
+                    finally_=[Step("upload-reports", Shell(script='echo "{{ step.outcome }}"'))],
                 ),
             ],
-            on_failure=[expect("notify", "verify", "Failed")],
-            finally_=[Shell(name="cleanup", script='echo "{{ step.name }} {{ step.status }}"')],
+            on_failure=[expect("notify", "verify", "failed")],
+            finally_=[Step("cleanup", Shell(script='echo "{{ step.name }} {{ step.outcome }}"'))],
         ),
         Stage(
             "deploy",
-            [Shell(name="staging", script="echo deploying")],
+            [Step("staging", Shell(script="echo deploying"))],
             when="{{ param.deploy }} == 'true'",
-            finally_=[Shell(name="report", script='echo "{{ step.status }}"')],
+            finally_=[Step("report", Shell(script='echo "{{ step.outcome }}"'))],
         ),
     ],
 )

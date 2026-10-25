@@ -7,7 +7,7 @@ chart that installs its templates, and sets up checks on both sides.
 
 ```
 pipelines repo                          chart repo
-  blocks.py, pipelines/*.py               values.schema.json (the contract)
+  actions.py, pipelines/*.py              values.schema.json (the contract)
         │                                 values.yaml, values-<env>.yaml
         │  stagecraft render  ◀───────────────┘ (reads the schema)
         ▼
@@ -36,7 +36,7 @@ publish them as a build artifact the chart's build picks up.
 ## Checks in the pipelines repo
 
 ```sh
-uv run pytest                                                    # your block tests
+uv run pytest                                                    # your action tests
 uv run stagecraft check pipelines --values-schema <chart>/values.schema.json
 ```
 
@@ -80,7 +80,7 @@ committed, that diff is in the pull request.
   submit form.
 - **Hooking up pushes and pull requests**: anything that can submit a workflow with params works
   (Argo Events, a webhook relay, another CI system). Stagecraft only defines what a run does.
-- **Reading a run**: each stage is a node in the graph, its blocks inside it; handlers and status
+- **Reading a run**: each stage is a node in the graph, its steps inside it; handlers and status
   reports appear next to the step they belong to.
 - **Seeing a pipeline's shape**: `uv run stagecraft graph pipelines --pipeline <name>`.
 
@@ -88,7 +88,7 @@ committed, that diff is in the pull request.
 
 - `render` writes one file per pipeline into the chart's templates; how it reaches the chart repo
   is your choice.
-- The pipelines repo runs block tests and `stagecraft check` against the chart's schema.
+- The pipelines repo runs action tests and `stagecraft check` against the chart's schema.
 - The chart repo runs `helm template`, `argo lint`, and kubeconform per environment.
 
 Next: [10. Designing pipelines](10-designing-pipelines.md), which puts it all together.

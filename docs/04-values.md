@@ -2,18 +2,18 @@
 
 Pipelines run in more than one place: a staging cluster and a production cluster may use
 different registries, Secrets, and machine sizes. Those details are **Helm values**, owned by the
-chart. This chapter covers how blocks and pipelines use them, and the contract that makes every
+chart. This chapter covers how actions and pipelines use them, and the contract that makes every
 use safe.
 
 ## Two ways to reference a value
 
-**In a block's `compile`**, call `ctx.value(path, type)`:
+**In an action's `compile`**, call `ctx.value(path, type)`:
 
 ```python
 image=ctx.value("images.build", str)
 ```
 
-**In a block's fields** (and in `when` conditions and trigger params), write a placeholder:
+**In an action's fields** (and in `when` conditions and trigger params), write a placeholder:
 
 ```python
 Notify(channel="{{ values.notify.channel }}")
@@ -23,13 +23,13 @@ Both mean "the value at `.Values.<path>` in this installation." Neither gives yo
 itself: Stagecraft runs before any installation exists. What you get back is a reference that
 renders as a Helm expression, which Helm fills in at install time.
 
-`type` is how the block uses the value: `str`, `int`, `float`, or `bool`. Placeholders accept
+`type` is how the action uses the value: `str`, `int`, `float`, or `bool`. Placeholders accept
 any scalar type.
 
 ## The contract
 
 The chart's `values.schema.json` is the contract. Every reference is checked against it at
-render time, and any problem fails the render, naming the pipeline, stage, block, and path. A
+render time, and any problem fails the render, naming the pipeline, stage, step, and path. A
 referenced value must be:
 
 - **Declared**: under `properties` at every level. `additionalProperties: true` doesn't count: an
@@ -50,8 +50,8 @@ says `integer`.
 What the errors look like:
 
 ```
-pipeline 'service-ci', stage 'verify', block 'lint': value 'build.memory' is not declared in the values schema (no property 'memory' under build)
-pipeline 'service-ci', stage 'verify', block 'lint': value 'build.region' is optional in the values schema ('region' is not required); only required values can be referenced
+pipeline 'service-ci', stage 'verify', step 'lint': value 'build.memory' is not declared in the values schema (no property 'memory' under build)
+pipeline 'service-ci', stage 'verify', step 'lint': value 'build.region' is optional in the values schema ('region' is not required); only required values can be referenced
 value 'build.retries' is integer in the values schema, but is used as string
 ```
 
@@ -60,7 +60,7 @@ value 'build.retries' is integer in the values schema, but is used as string
 Builds need different machine sizes per cluster, so `Make` takes its resource requests from the
 chart:
 
-```python file=blocks.py
+```python file=actions.py
 import re
 
 from hera.workflows import Container
@@ -68,10 +68,10 @@ from hera.workflows.models import ResourceRequirements
 from pydantic import field_validator
 
 from stagecraft.context import CompileContext
-from stagecraft.spec import Block
+from stagecraft.spec import Action
 
 
-class Shell(Block):
+class Shell(Action):
     """Runs a shell script in the chart's shell image."""
 
     script: str
@@ -84,7 +84,7 @@ class Shell(Block):
         )
 
 
-class Make(Block):
+class Make(Action):
     """Runs one make target in the chart's build image, with the chart's build resources."""
 
     target: str
@@ -111,7 +111,7 @@ class Make(Block):
 ```
 
 Note `ResourceRequirements` (from `hera.workflows.models`) rather than Hera's `Resources` helper:
-the helper checks units like `Gi` when the block is compiled, and a value reference isn't a
+the helper checks units like `Gi` when the action is compiled, and a value reference isn't a
 quantity yet. The general rule: if a Hera helper validates a field's content, use the plain model
 for value references.
 
@@ -155,10 +155,10 @@ build:
 }
 ```
 
-`Make` now needs `build.cpu` and `build.memory`, so its test's contract grows too. A block's
-test contract lists exactly what the block needs, which also documents it:
+`Make` now needs `build.cpu` and `build.memory`, so its test's contract grows too. An action's
+test contract lists exactly what the action needs, which also documents it:
 
-```python file=tests/test_blocks.py
+```python file=tests/test_actions.py
 import pytest
 from pydantic import ValidationError
 
@@ -166,7 +166,7 @@ from stagecraft.context import CompileContext
 from stagecraft.contract import ValuesContract
 from stagecraft.errors import CompileError
 
-from blocks import Make
+from actions import Make
 
 
 def strings(**groups: list[str]) -> dict:
@@ -244,7 +244,7 @@ Chapter 7 uses exactly this.
 ## A nested chart: `--values-prefix`
 
 If the chart keeps these values under a key, for example `ci:` in an umbrella chart, keep the
-block paths short and render with a prefix:
+value paths short and render with a prefix:
 
 ```sh
 uv run stagecraft render pipelines --values-schema chart/values.schema.json \
@@ -258,7 +258,7 @@ uv run stagecraft render pipelines --values-schema chart/values.schema.json \
 - **Optional values.** There are no fallbacks or guards: a pipeline uses only what the chart
   guarantees.
 - **Objects and arrays** (a whole `tolerations` list or `resources` block from values). Reference
-  scalars inside a block-built object instead, as `Make` does with `requests={...}`.
+  scalars inside an object the action builds instead, as `Make` does with `requests={...}`.
 - **Values in integer-only or boolean fields.**
 
 These are listed, with what would justify each, in

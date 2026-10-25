@@ -11,7 +11,7 @@ spec:
       - 'false'
       name: fail
       value: 'false'
-    - description: Seconds the build block sleeps
+    - description: Seconds the build step sleeps
       name: sleep
       value: '0'
   entrypoint: main
@@ -46,7 +46,7 @@ spec:
     name: on-exit
   - container:
       args:
-      - 'echo "{{`{{workflow.name}}`}}: {{`{{workflow.status}}`}}"; test "{{`{{workflow.status}}`}}" = Succeeded'
+      - 'echo "{{`{{workflow.name}}`}}: succeeded"; test "succeeded" = succeeded'
       command:
       - sh
       - -c
@@ -54,7 +54,7 @@ spec:
     name: on-success-notify
   - container:
       args:
-      - 'echo "{{`{{workflow.name}}`}}: {{`{{workflow.status}}`}}"; test "{{`{{workflow.status}}`}}" != Succeeded'
+      - 'echo "{{`{{workflow.name}}`}}: failed"; test "failed" = failed'
       command:
       - sh
       - -c
