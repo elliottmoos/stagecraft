@@ -16,17 +16,19 @@ Goals:
 - CI/CD primitives are declared on stages and blocks, and the compiler lowers them to Argo mechanics.
 - Blocks are testable in isolation through a typed contract.
 - All installation-specific configuration is either a Helm value or bound at runtime. Pipeline and block code never contains literals that vary per installation.
-- The Helm chart owns the values contract. Stagecraft complies with it and refuses to render anything that violates it.
+- The Helm chart owns the values contract. Stagecraft complies with it and refuses to render anything that violates it. (From slice 13, Stagecraft generates the pipelines chart and its contract instead; section 16.)
 - Output is plain manifests (Helm-compatible templates), committed and reviewable.
 
 Non-goals:
 - Hera is a compiler here, not a runtime. Pipelines are never executed from Python.
-- Stagecraft does not generate or own the Helm chart (no `Chart.yaml`, `values.yaml`, `values.schema.json`, helpers, or packaging) and does not define the values contract.
+- Stagecraft does not generate or own the Helm chart (no `Chart.yaml`, `values.yaml`, `values.schema.json`, helpers, or packaging) and does not define the values contract. Reversed from slice 13 (decided 2026-10-25): Stagecraft generates a self-contained pipelines chart (`Chart.yaml`, `values.schema.json`, `templates/`) and nothing else. It still never writes `values.yaml` and never generates the resources pipelines depend on (service accounts, RBAC, Secrets); section 16.
 - Stagecraft does not define a catalog of concrete CI blocks (clone, build, deploy, and so on). Block authors, or a separate library, own those. The framework only defines the block base type and the Argo features it maps to.
 - No replacement for Argo Events or Argo CD, and no custom UI.
 - Not every Argo feature is modeled. An escape hatch to raw Hera exists.
 
 ## 3. Repository boundaries
+
+From slice 13 this changes (section 16): the pipelines project renders its own self-contained chart, installed as its own Helm release next to whatever chart provides the service accounts and Secrets. Until then:
 
 Three roles, which can be two or three repos:
 
@@ -145,7 +147,7 @@ Accepted gaps: `argo terminate` runs no exit handlers, and `argo stop` skips the
 
 Accepted gap (decided 2026-10-24; Kubernetes resources are eventually consistent anyway): Helm applies a release's `CronWorkflow`s before its `WorkflowTemplate`s. Helm 4.1.0 sorts kinds it doesn't know by name and creates resources in batches by kind, waiting for each batch (`lessByKind`, `batchPerform`); watching an install on kind showed the cron created 6.5 ms before its template. Argo 4.1.6 validates a new `CronWorkflow` against its template on arrival. If the template isn't there yet, the cron is marked invalid and not scheduled until the controller processes it again: about 3 minutes on kind, and at most its 20-minute informer resync. So the first ticks after an install that creates a cron can be missed. Inlining the workflow spec in each cron would avoid this, at the cost of bigger manifests and scheduled runs no longer linked to the template in the UI.
 
-**Workspace strategies.** Constraint: the current workspace is an EBS-backed PVC (ReadWriteOnce), which limits true cross-node parallelism. Blocks declare their workspace access, and the strategy is a compile-time choice stated explicitly in the pipeline definition (`workspace=Workspace(strategy=..., size=...)`); it is required when any block declares access, and never inferred (decided 2026-10-24). The strategy consumes no Helm values and nothing from the `CompileContext`: each rendered manifest has exactly one shape, visible in the pipeline file and the diff.
+**Workspace strategies.** Superseded by section 16 (no shared filesystem; files cross job boundaries only as artifacts) and removed in slice 11. Until then this describes the current code. Constraint: the current workspace is an EBS-backed PVC (ReadWriteOnce), which limits true cross-node parallelism. Blocks declare their workspace access, and the strategy is a compile-time choice stated explicitly in the pipeline definition (`workspace=Workspace(strategy=..., size=...)`); it is required when any block declares access, and never inferred (decided 2026-10-24). The strategy consumes no Helm values and nothing from the `CompileContext`: each rendered manifest has exactly one shape, visible in the pipeline file and the diff.
 
 1. `containerset`: a stage's workspace blocks, when there are two or more, run as containers of one `containerSet` pod. Implemented in slice 7:
    - The workspace is one ReadWriteOnce claim per run (`volumeClaimTemplates`, the pipeline's `size`, no storage class), deleted when the run ends whether it succeeded or failed (`volumeClaimGC: OnWorkflowCompletion`). Stages run one after another, so only one pod mounts it at a time.
@@ -175,7 +177,7 @@ A strategy that cannot work without an installation-specific value is not suppor
 
 **Exception by design: workspace strategy.** The workspace strategy is a compile-time pipeline decision and does not read Helm values. Platform details it needs resolve on the cluster through defaults (section 7).
 
-**The chart owns the contract.** The values contract is the chart's `values.schema.json` (Helm's native JSON Schema mechanism). Stagecraft is a consumer of that contract.
+**The chart owns the contract.** The values contract is the chart's `values.schema.json` (Helm's native JSON Schema mechanism). Stagecraft is a consumer of that contract. From slice 13, Stagecraft generates the contract from the value references instead, and Helm enforces it when values are supplied (section 16); the resolver rules below then no longer apply, and the values prefix option is removed.
 
 **Validation at render time.** Every value reference, whether it comes from a `{{ values.a.b }}` placeholder in a pipeline file or from a block's declared references, is checked against the schema. Rendering fails, with the offending pipeline, block, and path in the error, when:
 - the path does not exist in the schema (undeclared keys are treated as nonexistent; the contract should be strict about `additionalProperties`),
@@ -204,7 +206,7 @@ Decided: references must be **required** at every level of the schema and non-nu
 3. **Contract validation**: with a fixture schema, assert that a missing path, a wrong type, and an unhandled optional value each fail rendering with a clear error, and that a valid reference renders.
 4. **Composition**: each step's required inputs are produced by an earlier stage, status contexts are unique, and parallel `write` paths do not overlap. (Status contexts and workspace writers are checked; inputs and `paths` are deferred, section 15.)
 5. **Compile and snapshot**: assert structure (dependencies, hooks, `onExit`, resources) and snapshot the rendered templates so every change appears in review.
-6. **Static validation**: run `helm template` against a **test-only fixture chart** (with fixture values and schema) inside the stagecraft repo, then `argo lint` and kubeconform on the result. Include escaping tests for Argo expressions in scripts, `when`, and `depends`. The fixture chart is never published.
+6. **Static validation** (from slice 13, on the generated chart with a test values file, and the fixture chart is removed): run `helm template` against a **test-only fixture chart** (with fixture values and schema) inside the stagecraft repo, then `argo lint` and kubeconform on the result. Include escaping tests for Argo expressions in scripts, `when`, and `depends`. The fixture chart is never published.
 7. **Behavior** (kind or k3d with Argo installed, small and slow): a `run_block` fixture wraps a block in a one-step workflow, installs the fixture chart, submits it, and asserts on phase and outputs. Separate tests deliberately fail and pass steps to prove hooks, `onExit`, and status sequences fire correctly, including skipped and cancelled cases.
 
 The consumer repo has its own CI: `stagecraft check` and `render` against the real schema, then `helm template` per environment's values, `argo lint`, and kubeconform.
@@ -241,6 +243,16 @@ stagecraft/
 9. CLI polish (`check`, `graph`, `contexts`) and docs.
 10. Triggers: `Trigger.cron` compiled to `CronWorkflow` (added after the original plan, which had left it out).
 
+Planned after the concept model (section 16, agreed 2026-10-25):
+
+11. Remove the shared workspace: `Workspace`, `containerset`, the per-run claim, and workspace access flags.
+12. Actions and jobs: composition replaces `Block` inheritance; Stagecraft's outcome vocabulary.
+13. Generate the pipelines chart: `Chart.yaml`, a `values.schema.json` built from value references, and `templates/`. Removes `--values-schema`, `--values-prefix`, and the test fixture chart.
+14. Main source: the source job (revision resolved to a SHA, checkout published as an artifact), injection into every job, `{{ source.* }}`, checks on the resolved SHA, framework values under `stagecraft.sources`. Verify on kind first.
+15. Artifacts between jobs: declared action inputs and outputs, `"<stage>.<job>.<artifact>"` references, cross-stage plumbing, artifact GC. Verify against kind's MinIO first.
+16. Stage sources.
+17. The condition API.
+
 Section 15 lists what was deliberately left out. Do not generalize before two or three real pipelines exist.
 
 ## 12. `CLAUDE.md` contents
@@ -264,34 +276,151 @@ Section 15 lists what was deliberately left out. Do not generalize before two or
 - Autoscaler behavior with `node-affinity` (a node must fit all parallel pods).
 - Whether each strategy works using only cluster defaults (default StorageClass and default artifact repository).
 - Argo CD sync order for CRDs versus chart contents, if Argo CD deploys the chart.
+- For section 16, on kind with its MinIO: a git input artifact checking out a commit that isn't a branch tip, at shallow depth; a global output parameter read by `onExit` and by exit hooks; artifacts routed through stage DAG outputs and inputs; an input artifact placed inside another (an artifact under the source checkout); whether a failed job's outputs are uploaded; `artifactGC` deleting objects when a workflow is deleted.
 - What `values.schema.json` can and cannot express (for example `$ref`, `oneOf`, defaults) and how much of it the validator must support.
 
 ## 14. Open decisions
 
-- Where pipeline definition files live: the chart repo or a separate pipelines repo.
+- Where pipeline definition files live: the chart repo or a separate pipelines repo. (Settled by section 16: a pipelines project renders its own chart.)
 - Commit rendered templates into the chart repo, or publish them as a build artifact.
 - Template naming across multiple releases in one namespace versus stable names in the Argo UI.
 - Whether a reference block library belongs in a third package.
+- Workflow TTL and the artifact GC service account (section 16): from the controller's `workflowDefaults`, or emitted per pipeline.
+- The generated chart's name and version (section 16). Default: a `--chart-name` flag and a fixed version `0.0.0`, since the chart is committed rather than published.
 - Whether to offer a resolved preview mode (render with a values file) for local debugging, or rely on `helm template`.
 
 ## 15. Deferred features
 
-Left out on purpose, as of slice 10 (2026-10-24). Each waits for a real pipeline that needs it ("do not generalize before two or three real pipelines exist"). The pipeline file or render error that would need it is the signal to pick one up.
+Left out on purpose, as of slice 10 (2026-10-24; updated for section 16 on 2026-10-25). Typed inputs and outputs, resolving a branch to its commit, and the workspace strategies left this list when section 16 replaced them. Each waits for a real pipeline that needs it ("do not generalize before two or three real pipelines exist"). The pipeline file or render error that would need it is the signal to pick one up.
 
 | Feature | Why deferred | Revisit when |
 |---|---|---|
-| Typed block inputs and outputs (template parameters and artifacts passed between steps), with the composition check that inputs come from an earlier stage and the declared-contract block test | No pipeline passes data between steps except through the workspace | A step needs another step's output that the workspace can't carry |
 | Escape hatch: a raw Hera template wrapped in a minimal contract (section 6) | Every fixture need was met by ordinary blocks | A block can't be expressed as one `Container` or `Script` |
 | Structured values: objects and arrays from Helm values (section 8) | Hera validates object and list fields, so a reference could only get there through placeholder workarounds and patching the output. Scalar references inside a block-built object already work | The chart must own the whole shape of a field, such as `tolerations`, `affinity`, or `resources` |
 | Values in non-string fields: integer or boolean fields such as `suspend` or a pure-int Kubernetes field | Value references are strings, and always render as strings | A block or trigger needs a Helm value in such a field (see per-installation trigger switch) |
-| `node-affinity` workspace strategy (section 7) | `containerset` covers parallel readers | Blocks that share the workspace need their own pods, for example for per-block `when`, `status`, or handlers, or for `Script` templates |
-| `artifact` workspace strategy (section 7) | Needs an artifact repository; `containerset` covers current needs | Stages must run on different nodes, or the workspace is too big for one volume |
-| Parallel workspace writers, with declared `paths` and an overlap check (section 7) | A writer must be its stage's only workspace block | Two blocks must write the workspace in the same stage |
-| Workspace access for handlers and the status reporter (section 7) | Unverified whether a step's exit hook finishes before the next stage mounts the volume | A handler must read the workspace (for example, uploading test reports); prove the ordering on kind first |
 | Per-installation trigger switch (`suspend` from Helm values) | A boolean field, so it waits for values in non-string fields | An environment must not run a pipeline's schedule |
 | Trigger options: `concurrencyPolicy`, history limits, `startingDeadlineSeconds`, several schedules in one trigger | Argo's defaults are fine; several schedules are several triggers | A schedule overlaps its own runs, or history needs tuning |
-| Resolving a branch's latest commit for scheduled runs | A trigger can only pass literal params, so a scheduled run's `sha` is literal and its commit status may fail to post (best-effort) | Scheduled runs need commit statuses |
+| Output parameters (small strings such as an image digest) | Section 16 passes files between jobs as artifacts only | A job needs a small value from an earlier job, or a condition needs one |
+| Optional action inputs | Every declared input must be bound | An action is useful both with and without an earlier job's files |
+| Artifacts for reactions and the reporter (for example, uploading a failed job's test reports) | Unverified whether a failed job's outputs are uploaded, and how exit hooks would receive them | A reaction must read a job's files; prove it on kind first |
+| Opting a job out of source injection | Every job downloads the sources; cheap from an in-cluster repository | Source download time matters for jobs that don't need them |
+| Caches that outlive a run (for example a Go module cache) | A different concept: shared across runs, not handed between jobs | Build times need them |
 | Multi-line scripts containing a string value as readable literal blocks (section 8) | Kept as double-quoted one-liners: correct for any value, but harder to read in diffs | Rendered templates are reviewed often enough for this to hurt |
 
 Accepted gaps (Argo or Helm behavior, not missing features) are kept with the mechanisms they affect in section 7: `argo terminate` and `argo stop` leaving statuses pending, stage and block handler failures not failing the pipeline, and new CronWorkflows missing their first ticks. Still unverified: an upgrade that changes a trigger's params together with its template's params (Helm updates the cron first, while the old template is still in place).
 
+
+## 16. Concept model and contracts (target, not yet built)
+
+Agreed 2026-10-25. This is the model the next slices build toward (section 11, slices 11 to 17). Where it conflicts with sections 5 to 7, those sections describe the current code and this section wins for new work. Points marked **open** are settled in the slice that builds them.
+
+### Personas
+
+Two kinds of user, and every concept belongs to one of them:
+
+| Persona | Writes | Should know | Should never need |
+|---|---|---|---|
+| **Pipeline author** (service team) | Pipelines: configuration | Stagecraft's CI vocabulary | Hera, Argo, Helm |
+| **Action author** (platform team) | Reusable units of work: code | Containers, Hera's `Container` and `Script`, Helm values by path and type | DAGs, hooks, Helm syntax, workflow-level Argo |
+
+Today's `Block` serves both personas in one class: the action author defines it, and the pipeline author fills in fields it inherits (`when`, `status`, handlers). The split replaces that inheritance with composition: an **action** (what runs) placed by a **job** (where and under which conditions it runs).
+
+### Concepts
+
+| Concept | CI meaning | Defined by | What the framework guarantees | Argo it hides |
+|---|---|---|---|---|
+| **Pipeline** | A named CI process, installed once per chart | Pipeline author | One installable unit; reactions and checks for the whole run | `WorkflowTemplate`, entrypoint, `onExit` |
+| **Run input** (param) | What a run is about | Pipeline author | Declared, validated, shown in the submit form | Workflow parameters |
+| **Source** | A repository at a commit | Pipeline author (pipeline or stage) | Resolved to one commit SHA, fetched once, placed at a framework-chosen path | Git, artifacts, global outputs |
+| **Stage** | An ordered phase, and a barrier | Pipeline author | Its jobs run concurrently; it fails if any job fails; later stages run after success or skip | Sub-DAG, `depends` |
+| **Job** | A named placement of an action in a stage | Pipeline author | Has an outcome; can be conditional, checked, reacted to; inputs wired | Tasks, `when`, hooks, artifact arguments |
+| **Action** | Reusable, configurable work that runs as one container | Action author | Configuration validated; value references typed and collected into the chart's schema; run inputs substituted | Template naming and wiring |
+| **Artifact** | Files one job hands to jobs in later stages | Action author declares; pipeline author wires | Exists before any consumer runs; deleted with the run | Output and input artifacts, stage DAG plumbing, artifact GC |
+| **Outcome** | succeeded, failed, or skipped | Framework | One vocabulary for reactions, checks, and conditions | Argo phases (`Succeeded`, `Error`, `Omitted`, ...) |
+| **Condition** | Whether a job or stage runs | Pipeline author | Typed, checked at render time | `when` expressions and their quoting |
+| **Reaction** (handler) | Work triggered by an outcome | Pipeline author, using actions | When it fires, what context it gets, failure semantics (section 6) | Exit hooks, `onExit` |
+| **Check** (commit status) | An outcome shown on the commit | Pipeline author names it; a **reporter** action delivers it | Pending before final; skipped counts as success; best-effort | Report tasks, the `status-report` DAG |
+| **Schedule** (trigger) | Runs without a human | Pipeline author | Valid schedule, complete inputs | `CronWorkflow` |
+| **Installation config** | Per-environment settings | Supplied at deploy time, against the generated schema | Every referenced value required and typed; Helm rejects bad values before anything is installed | Helm syntax, escaping, the schema |
+
+There is no shared workspace concept any more (see "Files between jobs").
+
+### The action contract
+
+The only place an action author plugs in code.
+
+- **Configuration:** the action's own validated fields. Run inputs and Helm values arrive as placeholders in those fields; installation values also through `ctx.value(...)` in `compile`.
+- **Interface:** the artifacts it reads and writes, each a name and a path: `outputs = {"bin": "dist/app"}`, `inputs = {"bin": "dist/app"}`. A relative path is inside the main source checkout. Every declared input is required.
+- **Output:** exactly one Hera `Container` or `Script`. Template-level settings (retries, timeouts, service account) are allowed again, since no job shares a pod.
+- **Outcome:** exit code 0 means succeeded; anything else means failed.
+- **Rules:** pure (no I/O, env reads, or globals), no Helm syntax, no workflow-level Argo. Actions don't declare sources; sources are injected (below).
+
+The **reporter** is an action that reads `{{ status.context }}`, `{{ status.state }}`, `{{ status.description }}`, `{{ source.repo }}`, and `{{ source.sha }}`. Checks require a pipeline source, which replaces today's `repo`/`sha` param convention.
+
+### The job contract
+
+A job binds an action into a stage: its name (unique in the stage), its condition, its check context, its reactions, and the source of every input:
+
+```python
+Stage("package", [
+    Job("image", DockerBuild(), inputs={"bin": "build.compile.bin"}, status="ci/image"),
+])
+```
+
+Input references are `"<stage>.<job>.<artifact>"`. The render fails when a reference names a stage, job, or artifact that doesn't exist; names a job in the same or a later stage; names a job or stage that has a condition (it may be skipped, leaving no artifact); binds an input the action doesn't declare; or leaves a declared input unbound.
+
+**Open:** the exact API, including whether a bare action in a stage is shorthand for a job with a default name.
+
+### Sources and revisions
+
+- **Declaring them.** A pipeline has at most one main source: `Pipeline(source=Source(repo=..., revision=...))`. A stage can request more: `Stage(..., sources=[Source(name="fixtures", repo=..., revision=...)])`. Arbitrary extra sources exist only at stage level. `repo` and `revision` may use `{{ param.x }}` and `{{ values.a.b }}`.
+- **Revisions.** A revision is a commit SHA or any other reference. A reference that isn't a SHA is resolved to its head commit once, and that SHA is used from then on. The main source resolves before the first stage. A stage source resolves when its stage starts, so all of that stage's jobs see one commit. `argo retry` keeps succeeded nodes, so a retried run keeps its SHAs.
+- **Fetching.** A framework-generated source job resolves the revision, checks it out, and publishes the checkout (with `.git`) as an artifact and the SHA as an output. The main source job is a task named `source` before the first stage. A stage source job is a task `source-<name>` at the start of its stage's sub-DAG, which its jobs depend on. The SHA of the main source is a global output, so pipeline reactions and checks can read it (`{{ source.sha }}`).
+- **Injection.** Every job gets the main source, and every job in a stage gets that stage's sources, through an input artifact the framework adds. Sources are placed at `/sources/<name>` (the main source is named `main`) and exposed as `STAGECRAFT_SOURCE_<NAME>` (uppercased, `-` as `_`). Paths are unique by construction: source names are unique within a stage and `main` is reserved. The main source's path is the default working directory.
+- **Reactions and the reporter get no sources.** They run from exit hooks and `onExit`, which also run when a source job failed. They read `{{ source.repo }}` and `{{ source.sha }}` instead.
+- **Accepted gap:** if the main source job fails (bad reference, credentials), there is no SHA, so the pipeline's check can't be reported. The failure shows in the Argo UI.
+- **Settings:** the source job's image and git credentials are framework values at fixed paths under `stagecraft.sources` in the generated chart (below), required as soon as a pipeline declares a source. The exact keys are settled in slice 14.
+
+### Files between jobs
+
+**There is no shared filesystem**, not even between sequential stages (decided 2026-10-25). The cluster's storage is ReadWriteOnce (EBS) on multi-zone clusters, so a shared per-run volume pins a run to one zone and serializes its parallel jobs onto one node or pod.
+
+- Each job has private scratch: its own container filesystem, including its copy of the sources.
+- Anything that crosses a job boundary is an artifact (sources included), stored in the controller's default artifact repository. Ours is S3-compatible (RustFS). Stagecraft emits no repository configuration.
+- Cross-stage references are routed by the compiler: the producing stage's sub-DAG exports the artifact as a DAG output (`from: {{tasks.<job>.outputs.artifacts.<name>}}`), the consuming stage's task passes it in as an argument, and the consuming job receives it from the stage's inputs. Authors only write `"<stage>.<job>.<artifact>"`.
+- **Retention:** Stagecraft sets `artifactGC.strategy: OnWorkflowDeletion`. Deletion therefore needs workflows to be deleted, and the GC pods need a service account allowed to delete from the bucket. **Open:** whether both come from the controller's `workflowDefaults` (recommended: platform settings, like the artifact repository) or from the pipeline.
+- Removed: `Workspace`, the `containerset` strategy, the per-run claim, `workspace="read"/"write"`, the writer rule, and the reserved `workspace` job name.
+- Caches that outlive a run are a separate concept, out of scope for now (section 15).
+
+### Outcomes
+
+Stagecraft's outcomes are `succeeded`, `failed`, and `skipped`, mapped from Argo phases (`Succeeded`; `Failed` and `Error`; `Skipped` and `Omitted`). Reactions, `{{ step.status }}`, check descriptions, and conditions use them instead of Argo phase names. **Open:** whether checks keep GitHub's separate `error` state for Argo's `Error`.
+
+### Conditions
+
+A typed condition API replaces raw `when` strings in pipeline files, for example `when=param("deploy") == "true"`. It removes the quoting trap (section 5) and is checked at render time. It covers only comparisons over Stagecraft concepts that map cleanly onto Argo `when` expressions. Params come first; other operands (such as a source's revision or an earlier stage's outcome) are added when a pipeline needs them.
+
+### Escape valves
+
+Kept on purpose, with their use cases unknown yet:
+- **Hera inside actions.** Action authors build Hera `Container`s and `Script`s directly.
+- **Native Argo expressions in pipeline strings.** Passed through unchecked.
+
+### The generated chart
+
+Decided 2026-10-25. A pipelines project renders into one self-contained Helm chart, installed as its own release:
+
+```
+<out>/
+  Chart.yaml           generated; carries a Stagecraft marker annotation
+  values.schema.json   generated from the pipelines' value references
+  templates/           one file per pipeline (WorkflowTemplate, then its CronWorkflows)
+```
+
+- **Ownership.** Stagecraft owns exactly these three entries and replaces them on every render. It never creates or touches `values.yaml` or any other file in the directory, and refuses to render into a directory whose `Chart.yaml` lacks its marker.
+- **Values come at deploy time**, from a file such as `values-pipelines.yaml` passed to the release. The chart has no defaults: every referenced value is required, and Helm rejects a missing or wrongly typed value at `helm template` or install, naming the path.
+- **The schema is generated.** Each value reference, from `ctx.value(path, type)` or a `{{ values.a.b }}` placeholder (always a string), becomes a required, typed property; objects are strict (`additionalProperties: false`), except that `global` is allowed so the chart also works as a subchart. Two references to the same path with different types fail the render. The cost, accepted: a mistyped path becomes a new required value instead of a render error, so it surfaces at `helm template` rather than `stagecraft render`, and the generated schema has no descriptions, enums, or patterns.
+- **Framework values** live under the reserved `stagecraft` key (for example `stagecraft.sources`). A reference into `stagecraft.` from an action or pipeline fails the render.
+- **Not generated:** what pipelines depend on by name: the workflow service account and RBAC, the Secrets (GitHub token, git credentials), the artifact repository, and controller defaults. Whatever deploys them today keeps doing so; the chart refers to them through values.
+- **As a subchart.** Not needed, but possible: vendored into another chart's `charts/` directory, listed in its `Chart.yaml` dependencies (Helm 4.1 `helm lint` requires the listing), with its values under the chart's name. Helm validates a subchart's schema against its scoped values (verified with Helm 4.1.0).
+- **CLI.** `render` writes the chart; `check` compiles without writing. `--values-schema` and `--values-prefix` are removed.
