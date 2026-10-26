@@ -1,4 +1,4 @@
-# 9. Triggers
+# 10. Triggers
 
 Some runs should happen on a schedule: a nightly build of the main branch, a weekly dependency
 check. A **trigger** runs the pipeline on a schedule.
@@ -58,14 +58,34 @@ pipeline = Pipeline(
             status="ci/verify",
             on_failure=[Notify(message="{{ step.name }} failed at {{ source.sha }}")],
         ),
+        Stage("build", [Step("binary", Make(target="build", produces={"app": "bin/app"}))]),
         Stage(
             "package",
-            [Step("image", Make(target="image", variables={"PUSH": "{{ param.push }}"}))],
+            [
+                Step(
+                    "image",
+                    Make(
+                        target="image",
+                        variables={"PUSH": "{{ param.push }}"},
+                        consumes={"app": "bin/app"},
+                        results={"digest": "image.digest"},
+                    ),
+                    inputs={"app": "build.binary.app"},
+                )
+            ],
             status="ci/package",
         ),
         Stage(
             "deploy",
-            [Step("staging", Make(target="deploy-staging"))],
+            [
+                Step(
+                    "staging",
+                    Make(
+                        target="deploy-staging",
+                        variables={"IMAGE": "{{ steps.package.image.digest }}"},
+                    ),
+                )
+            ],
             when="{{ param.deploy }} == 'true'",
             status="ci/deploy",
         ),
@@ -101,4 +121,4 @@ its head commit when it starts, so the whole run, and its commit statuses, use t
 - It compiles to a `CronWorkflow` that refers to the pipeline's template, in the same file.
 - Required params must be set; values may come from Helm values.
 
-Next: [10. Shipping pipelines](10-shipping.md).
+Next: [11. Shipping pipelines](11-shipping.md).

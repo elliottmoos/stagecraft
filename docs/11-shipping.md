@@ -1,4 +1,4 @@
-# 10. Shipping pipelines
+# 11. Shipping pipelines
 
 A pipeline is only useful once it's installed. This chapter covers getting the generated chart
 into a cluster, and the checks that keep it installable.
@@ -92,4 +92,4 @@ the diff of the generated chart like any other change: it's in the pull request.
 - CI renders and checks the chart is up to date, then runs `helm template` (which validates the
   values), `argo lint`, and kubeconform per environment.
 
-Next: [11. Designing pipelines](11-designing-pipelines.md), which puts it all together.
+Next: [12. Designing pipelines](12-designing-pipelines.md), which puts it all together.

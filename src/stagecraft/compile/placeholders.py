@@ -9,7 +9,7 @@ from stagecraft.errors import CompileError
 
 # Only stagecraft namespaces are matched; native Argo expressions pass through untouched.
 _PLACEHOLDER = re.compile(
-    r"\{\{\s*(param|setup|source|step|status|values)\.([A-Za-z0-9_.-]+)\s*\}\}"
+    r"\{\{\s*(param|setup|source|step|steps|status|values)\.([A-Za-z0-9_.-]+)\s*\}\}"
 )
 
 # Namespaces that only exist in some places, and why a placeholder outside them fails.
@@ -17,8 +17,17 @@ _SCOPED = {
     "setup": "needs a setup step (Pipeline(setup=...))",
     "source": "needs a pipeline source (Pipeline(source=...))",
     "step": "is only available in handlers (on_success, on_failure, finally_)",
+    "steps": "is only available in steps, conditions, and handlers, from earlier stages",
     "status": "is only available in the status_reporter",
 }
+
+# What an unknown field means, where the generic "unknown field" would mislead.
+_UNKNOWN = {"steps": "is not an output of a step in an earlier stage"}
+
+
+class Unavailable(str):
+    """A scoped field that exists but can't be used; the string says why."""
+
 
 Scopes = Mapping[str, Mapping[str, str]]
 # Resolves `{{ values.a.b }}` to a recorded value reference (CompileContext.value).
@@ -57,11 +66,19 @@ def lower(
             fields = scopes.get(namespace)
             if fields is None:
                 raise CompileError(f"'{{{{ {namespace}.{path} }}}}' {_SCOPED[namespace]}")
+            placeholder = f"'{{{{ {namespace}.{path} }}}}'"
             if path not in fields:
+                if namespace in _UNKNOWN:
+                    raise CompileError(
+                        f"{placeholder} {_UNKNOWN[namespace]}; available: {sorted(fields)}"
+                    )
                 raise CompileError(
                     f"unknown {namespace} field {path!r}; available: {sorted(fields)}"
                 )
-            return f"'{fields[path]}'" if quote_params else fields[path]
+            value = fields[path]
+            if isinstance(value, Unavailable):
+                raise CompileError(f"{placeholder} {value}")
+            return f"'{value}'" if quote_params else value
         if values is None:
             raise CompileError(f"'{{{{ values.{path} }}}}' needs a compile context")
         return values(path)

@@ -73,6 +73,9 @@ Facts confirmed by experiment or by `tests/integration`. Re-check them when bump
   container ran, or stays literal (`{{workflow.outputs.parameters.x}}`) when it never started.
   Neither is an error, so guards test its shape (`=~ '^[0-9a-f]{40}$'`).
 - A failed step's output artifacts are still uploaded when its main container ran.
+- Global outputs of a pod inside a stage's sub-DAG reach later stages' steps and `onExit`. An
+  input artifact can be placed inside another (an artifact in the checkout at
+  `/sources/main/dist/app`), whichever is listed first.
 - A `steps` template's outputs with a `globalName` become global outputs; a `dag` template's
   never do (the node gets them, the workflow doesn't). So the setup wrapper is a `steps` template.
 - `argo lint --offline` resolves a `templateRef` only against the files it's given; lint rendered
@@ -154,8 +157,9 @@ public `octocat/Hello-World` repository from GitHub, so the kind cluster needs n
   phases. The status reporter keeps host-style states (`success`, `failure`, `error`).
 - There is no shared filesystem: each step runs in its own pod, and files will cross step
   boundaries only as artifacts (decided 2026-10-25). Don't add volumes shared between steps.
-- `DESIGN.md` section 16 is the target model for the next slices (artifacts and step outputs,
-  stage sources, conditions). Read it before changing the authoring model.
+- `DESIGN.md` section 16 is the target model for the next slices (stage sources, conditions).
+- Step outputs and artifacts are declared the Hera way on the action's template; Stagecraft adds
+  `globalName`s and binds inputs. It emits no artifact GC or TTL: those are controller defaults. Read it before changing the authoring model.
 - Hera's API changes between versions, so check the pinned version's docs rather than guessing.
 - Don't generalize before two or three real pipelines exist. `DESIGN.md` section 15 lists the
   deferred features and what would justify each; update it when one is built or newly deferred.

@@ -32,6 +32,18 @@ def mermaid(pipeline: Pipeline) -> str:
         lines += [f'  setup[["setup<br/>{_escape(label)}"]]', f"  setup --> {first}"]
         first = "setup"
     lines += [f"  s{i - 1} --> s{i}" for i in range(1, len(pipeline.stages))]
+    # Artifacts flow from the producing step to the step whose inputs bind them.
+    ids = {
+        (stage.name, step.name): f"s{i}b{j}"
+        for i, stage in enumerate(pipeline.stages)
+        for j, step in enumerate(stage.steps)
+    }
+    for i, stage in enumerate(pipeline.stages):
+        for j, step in enumerate(stage.steps):
+            for reference in step.inputs.values():
+                stage_name, step_name, artifact = reference.split(".")
+                if producer := ids.get((stage_name, step_name)):
+                    lines.append(f"  {producer} -->|{_escape(artifact)}| s{i}b{j}")
     for i, stage in enumerate(pipeline.stages):
         for j, step in enumerate(stage.steps):
             lines += _handlers(f"s{i}b{j}", step, HANDLER_FIELDS)

@@ -1,7 +1,7 @@
 from stagecraft.graph import mermaid
 from stagecraft.spec import Param, Pipeline, Source, Stage, Step, TemplateRef, Trigger
 
-from fixtures.actions import Shell
+from fixtures.actions import Build, Package, Shell
 
 
 def test_stages_are_ordered_subgraphs_of_steps():
@@ -145,3 +145,16 @@ def test_an_action_setup_is_labelled_with_its_step_name():
 
     assert '  setup[["setup<br/>shell"]]' in lines
     assert "  setup --> s0" in lines
+
+
+def test_artifacts_flow_from_producer_to_consumer():
+    pipeline = Pipeline(
+        name="p",
+        source=Source(url="https://example.com/repo.git", revision="main"),
+        stages=[
+            Stage("build", [Step("binary", Build())]),
+            Stage("package", [Step("image", Package(), inputs={"bin": "build.binary.bin"})]),
+        ],
+    )
+
+    assert "  s0b0 -->|bin| s1b0" in mermaid(pipeline).splitlines()

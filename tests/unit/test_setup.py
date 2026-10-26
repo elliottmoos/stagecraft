@@ -150,7 +150,7 @@ def test_template_ref_arguments_take_params_and_values():
 
 def test_the_setup_step_is_plain():
     with pytest.raises(
-        ValidationError, match="the setup step cannot set when, status, or handlers"
+        ValidationError, match="the setup step cannot set when, status, inputs, or handlers"
     ):
         pipeline(setup=Step("parse", Emit(values={}), status="ci/parse"))
 

@@ -1,4 +1,4 @@
-# 8. Commit statuses
+# 9. Commit statuses
 
 On GitHub, a pull request shows checks next to each commit, and branch protection can require
 some of them to pass before merging. Stagecraft can report a check for the pipeline and for any
@@ -63,8 +63,8 @@ source's URL:
 ```python file=actions.py
 import re
 
-from hera.workflows import Container, Env, SecretEnv
-from hera.workflows.models import ResourceRequirements
+from hera.workflows import Artifact, Container, Env, Parameter, SecretEnv
+from hera.workflows.models import ResourceRequirements, ValueFrom
 from pydantic import field_validator
 
 from stagecraft.context import CompileContext
@@ -87,11 +87,16 @@ class Shell(Action):
 class Make(Action):
     """Runs one make target in the chart's build image, with the chart's build resources.
 
-    `variables` are passed as make variables (NAME=value).
+    `variables` are passed as make variables (NAME=value). `produces` and `consumes` map artifact
+    names to files in the checkout the target writes or reads; `results` maps output names to
+    files whose contents become output parameters.
     """
 
     target: str
     variables: dict[str, str] = {}
+    produces: dict[str, str] = {}
+    consumes: dict[str, str] = {}
+    results: dict[str, str] = {}
 
     @field_validator("target")
     @classmethod
@@ -101,6 +106,13 @@ class Make(Action):
         return target
 
     def compile(self, ctx: CompileContext) -> Container:
+        outputs = [
+            *(Artifact(name=name, path=path) for name, path in self.produces.items()),
+            *(
+                Parameter(name=name, value_from=ValueFrom(path=path))
+                for name, path in self.results.items()
+            ),
+        ]
         return Container(
             image=ctx.value("images.build", str),
             command=["make"],
@@ -111,6 +123,8 @@ class Make(Action):
                     "memory": ctx.value("build.memory", str),
                 },
             ),
+            inputs=[Artifact(name=n, path=p) for n, p in self.consumes.items()] or None,
+            outputs=outputs or None,
         )
 
 
@@ -161,7 +175,7 @@ class GitHubStatus(Action):
         )
 ```
 
-The pipeline reports on itself and on each stage:
+The pipeline reports on itself and on the `verify`, `package`, and `deploy` stages:
 
 ```python file=pipelines/service_ci.py
 from stagecraft.spec import Param, Pipeline, Source, Stage, Step
@@ -188,14 +202,34 @@ pipeline = Pipeline(
             status="ci/verify",
             on_failure=[Notify(message="{{ step.name }} failed at {{ source.sha }}")],
         ),
+        Stage("build", [Step("binary", Make(target="build", produces={"app": "bin/app"}))]),
         Stage(
             "package",
-            [Step("image", Make(target="image", variables={"PUSH": "{{ param.push }}"}))],
+            [
+                Step(
+                    "image",
+                    Make(
+                        target="image",
+                        variables={"PUSH": "{{ param.push }}"},
+                        consumes={"app": "bin/app"},
+                        results={"digest": "image.digest"},
+                    ),
+                    inputs={"app": "build.binary.app"},
+                )
+            ],
             status="ci/package",
         ),
         Stage(
             "deploy",
-            [Step("staging", Make(target="deploy-staging"))],
+            [
+                Step(
+                    "staging",
+                    Make(
+                        target="deploy-staging",
+                        variables={"IMAGE": "{{ steps.package.image.digest }}"},
+                    ),
+                )
+            ],
             when="{{ param.deploy }} == 'true'",
             status="ci/deploy",
         ),
@@ -256,4 +290,4 @@ pipeline's own).
   pipeline's context.
 - Your `status_reporter` action makes the API call; reporting never fails the build.
 
-Next: [9. Triggers](09-triggers.md).
+Next: [10. Triggers](10-triggers.md).

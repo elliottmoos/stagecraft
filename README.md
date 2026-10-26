@@ -13,7 +13,7 @@ pipelines (Python) ──stagecraft render──▶ chart/ ──helm install -f
 Pinned targets: Hera 7.1.0, Argo Workflows 4.1.6, Helm 4, Python 3.12+. The design rationale is in
 [DESIGN.md](DESIGN.md).
 
-**New to Stagecraft? Start with the guide in [docs/](docs/README.md)**: ten short chapters
+**New to Stagecraft? Start with the guide in [docs/](docs/README.md)**: twelve short chapters
 that build one pipeline from scratch, layer by layer. This page is the quick overview.
 
 ## A pipelines repo
@@ -169,6 +169,10 @@ pipeline = Pipeline(
 - **A setup step** (`setup=`, an action or a `TemplateRef` to an existing WorkflowTemplate) runs
   before everything else; its output parameters work everywhere as `{{ setup.<output> }}`, for
   example to take the source's URL and commit from a webhook payload.
+- **Results between steps**: an action declares output parameters and artifacts on its template;
+  later stages read parameters as `{{ steps.<stage>.<step>.<output> }}` and bind artifacts with
+  `Step(..., inputs={"<input>": "<stage>.<step>.<artifact>"})`. Retention (artifact GC, TTL) is
+  set once in the controller's `workflowDefaults`.
 - **Params** become the Argo UI's submit form (descriptions, enums, defaults).
 - **`when`** (stage or step) skips it when false. Inside it, `{{ param.x }}` is a quoted
   string, so compare with quoted values: `"{{ param.deploy }} == 'true'"`.
@@ -189,6 +193,7 @@ pipeline = Pipeline(
 | `{{ param.x }}` | any action field, `when` | the workflow parameter |
 | `{{ values.a.b }}` | any action field, `when` | the Helm value `.Values.a.b`, a string |
 | `{{ setup.<output> }}` | any action field, `when`, source fields | an output parameter of the setup step |
+| `{{ steps.<stage>.<step>.<output> }}` | action fields, `when`, handlers, in later stages | an earlier step's output parameter |
 | `{{ source.url }}`, `{{ source.revision }}`, `{{ source.sha }}` | any action field, `when` | the source's URL, its revision as given, and the commit it resolved to |
 | `{{ step.name }}`, `{{ step.outcome }}` | handlers | the path (`stage` or `stage/step`), or the workflow's name in pipeline handlers; and the outcome, `succeeded` or `failed` |
 | `{{ status.context }}`, `{{ status.state }}`, `{{ status.description }}` | the `status_reporter` | the report being posted; state is `pending`, `success`, `failure`, or `error` |
@@ -258,9 +263,8 @@ pipelines refer to by name come from wherever you deploy them today.
 
 ## Known gaps
 
-- **Not built yet**: passing files and values from one step to later ones (artifacts, outputs
-  of ordinary steps), sources per stage (DESIGN.md section 16), and structured (object or array)
-  values.
+- **Not built yet**: sources per stage and the typed condition API (DESIGN.md section 16), and
+  structured (object or array) values.
 - **Right after an install that creates a trigger**, its first ticks can be missed: Helm applies
   the CronWorkflow before the WorkflowTemplate it references, and Argo re-checks the cron only
   minutes later (at most 20).

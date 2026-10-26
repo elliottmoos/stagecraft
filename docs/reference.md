@@ -78,10 +78,17 @@ Wherever a list takes `Step | Action`, a bare action is a step named after its c
 | `action` | Action | required (positional) | What runs |
 | `when` | str | None | As for stages |
 | `status` | str | None | As for stages |
+| `inputs` | dict[str, str] | `{}` | Binds each of the action's input artifacts to `"<stage>.<step>.<artifact>"` from an earlier stage |
 | `on_success`, `on_failure`, `finally_` | list[Step \| Action] | `[]` | Handlers |
 
-Handler steps can't set `when`, `status`, or handlers. Each step runs in its own pod; no files
-are shared between steps.
+Handler steps can't set `when`, `status`, `inputs`, or handlers. Each step runs in its own pod,
+from its own copy of the checkout.
+
+A step's outputs are the output parameters and artifacts its action's template declares
+(`outputs=[Parameter(...), Artifact(...)]`); its input artifacts (`inputs=[Artifact(...)]`) must all
+be bound in `inputs`, unless they have a source of their own. Relative artifact paths, and
+relative `value_from` paths of output parameters, are inside the checkout. Results come only
+from earlier stages, never from a step or stage with `when`.
 
 ## `Action`
 
@@ -136,6 +143,7 @@ chart it generated (a `Chart.yaml` with the annotation).
 | `{{ param.x }}` | action fields, `when` | `{{workflow.parameters.x}}`; quoted in `when` |
 | `{{ values.a.b }}` | action fields, `when`, trigger params, source fields | A Helm expression for `.Values.a.b` |
 | `{{ setup.<output> }}` | action fields, `when`, source fields, with a `setup` | The setup's output parameter, as a global output; quoted in `when` |
+| `{{ steps.<stage>.<step>.<output> }}` | action fields, `when`, and handlers, in later stages; pipeline handlers | An earlier step's output parameter, as a global output; quoted in `when` |
 | `{{ source.url }}`, `{{ source.revision }}`, `{{ source.sha }}` | action fields, `when`, with a `source` | The source's URL and revision as given, and the commit it resolved to; quoted in `when` |
 | `{{ step.name }}`, `{{ step.outcome }}` | handler action fields | The path (`stage` or `stage/step`), or the run's name in pipeline handlers; and `succeeded` or `failed` |
 | `{{ status.context }}`, `{{ status.state }}`, `{{ status.description }}` | `status_reporter` fields | The report being posted |

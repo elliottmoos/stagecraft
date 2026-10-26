@@ -24,6 +24,8 @@ _SETUP_STEP = "setup"
 _SOURCE_STEP = "source"
 # Output parameter names, as `{{ setup.<name> }}` references them.
 _OUTPUT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+# An earlier step's output artifact, as a step's `inputs` refer to it.
+_ARTIFACT_REF = re.compile(rf"{_DNS_LABEL.pattern}\.{_DNS_LABEL.pattern}\.{_OUTPUT_NAME.pattern}")
 
 
 def _check_name(value: str) -> str:
@@ -148,16 +150,31 @@ class _Node(_Model):
 
 
 class Step(_Node):
-    """An action placed in a stage (or a handler list) under a name, unique where it's placed."""
+    """An action placed in a stage (or a handler list) under a name, unique where it's placed.
+
+    `inputs` binds each of the action's input artifacts to an earlier step's output artifact, as
+    "<stage>.<step>.<artifact>".
+    """
 
     name: Name
     action: Action
+    inputs: dict[str, str] = {}
 
     def __init__(self, name: str, action: Action, /, **data) -> None:
         super().__init__(name=name, action=action, **data)
 
     def _label(self) -> str:
         return f"step {self.name!r}"
+
+    @field_validator("inputs")
+    @classmethod
+    def _check_inputs(cls, inputs: dict[str, str]) -> dict[str, str]:
+        for name, reference in inputs.items():
+            if not _ARTIFACT_REF.fullmatch(reference):
+                raise ValueError(
+                    f"input {name!r}: {reference!r} must be '<stage>.<step>.<artifact>'"
+                )
+        return inputs
 
 
 class Stage(_Node):
@@ -196,6 +213,10 @@ def _check_handlers(where: str, owner: BaseModel, fields: tuple[str, ...]) -> No
         handlers: list[Step] = getattr(owner, field)
         _check_step_names(f"{where} {field}", handlers)
         for handler in handlers:
+            if handler.inputs:
+                raise ValueError(
+                    f"{where} {field}: step {handler.name!r}: handler steps cannot take inputs"
+                )
             has_handlers = any(getattr(handler, f) for f in HANDLER_FIELDS)
             if handler.when is not None or handler.status is not None or has_handlers:
                 raise ValueError(
@@ -319,9 +340,10 @@ class Pipeline(_Model):
     def _check_setup(self) -> Self:
         setup = self.setup
         has_handlers = isinstance(setup, Step) and any(getattr(setup, f) for f in HANDLER_FIELDS)
-        if isinstance(setup, Step) and (setup.when or setup.status or has_handlers):
+        if isinstance(setup, Step) and (setup.when or setup.status or setup.inputs or has_handlers):
             raise ValueError(
-                f"pipeline {self.name!r}: the setup step cannot set when, status, or handlers"
+                f"pipeline {self.name!r}: the setup step cannot set when, status, inputs, or "
+                "handlers"
             )
         return self
 

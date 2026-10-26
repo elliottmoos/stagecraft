@@ -81,7 +81,7 @@ Pipeline(
 - **A plain step.** The setup can't set `when`, `status`, or handlers, and gets no checkout (it
   runs before the source). If it fails, the run fails before anything else runs.
 - **Linting.** `argo lint` checks a `TemplateRef` against the files it's given, so lint the
-  rendered chart together with the referenced WorkflowTemplate's manifest (chapter 10).
+  rendered chart together with the referenced WorkflowTemplate's manifest (chapter 11).
 - **`setup` is a reserved stage name.**
 
 ## Settings: the git image and credentials
@@ -173,4 +173,4 @@ kubectl create secret generic github-checkout -n argo \
 - A setup step (`TemplateRef` or an action) runs first; its outputs work everywhere as
   `{{ setup.<output> }}`, the source's fields included.
 
-Next: [8. Commit statuses](08-commit-statuses.md).
+Next: [8. Passing results between steps](08-passing-results.md).

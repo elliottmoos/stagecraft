@@ -1,4 +1,4 @@
-# 11. Designing pipelines
+# 12. Designing pipelines
 
 You've now seen every piece. This chapter steps back: the finished pipeline as a whole, a precise
 map of what you can and can't customize, patterns for growing beyond one pipeline, and a guide
@@ -7,7 +7,7 @@ to the errors you'll meet.
 ## The finished pipeline
 
 `uv run stagecraft graph pipelines --pipeline service-ci` draws the pipeline built over chapters
-2 to 9:
+2 to 10:
 
 ```mermaid
 ---
@@ -18,20 +18,25 @@ flowchart LR
     s0b0["lint"]
     s0b1["unit-tests"]
   end
-  subgraph s1["package<br/>status: ci/package"]
-    s1b0["image"]
+  subgraph s1["build"]
+    s1b0["binary"]
   end
-  subgraph s2["deploy<br/>when: {{ param.deploy }} == 'true'<br/>status: ci/deploy"]
-    s2b0["staging"]
+  subgraph s2["package<br/>status: ci/package"]
+    s2b0["image"]
+  end
+  subgraph s3["deploy<br/>when: {{ param.deploy }} == 'true'<br/>status: ci/deploy"]
+    s3b0["staging"]
   end
   src[("source<br/>https://github.com/example/service.git<br/>{{ param.revision }}")]
   src --> s0
   s0 --> s1
   s1 --> s2
+  s2 --> s3
+  s1b0 -->|app| s2b0
   s0h0["notify"]
   s0 -.->|on failure| s0h0
   p0["notify"]
-  s2 -.->|pipeline on failure| p0
+  s3 -.->|pipeline on failure| p0
   t0(["nightly<br/>0 2 * * * Europe/Amsterdam"])
   t0 -.-> src
 ```
@@ -44,17 +49,19 @@ Reading it from the left:
   starts in that checkout.
 - **`verify`** runs `lint` and `unit-tests` in parallel, each in its own pod. Its status is
   `ci/verify`, and its `on_failure` handler notifies the channel.
-- **`package`** builds the image, pushing it when `push` is `true`.
-- **`deploy`** only runs when `deploy` is `true`; otherwise it reports `ci/deploy` as "Skipped".
+- **`build`** compiles the service once and publishes the binary as the artifact `app`.
+- **`package`** receives `app` (the edge labelled `app`), builds the image around it, pushes it
+  when `push` is `true`, and publishes the image's digest.
+- **`deploy`** only runs when `deploy` is `true`, deploying the digest `package` published;
+  otherwise it reports `ci/deploy` as "Skipped".
 - **The pipeline's own status** `ci/pipeline` tracks the whole run, and its `on_failure` handler
   posts how a failed run ended.
 
 Everything installation-specific (images, build resources, the channel, the Secrets' names)
 comes from each installation's values, which Helm checks against the generated schema.
 
-Steps share nothing but the source: each starts from its own copy of the checkout. Passing files
-one step produces (a binary, a report) to later steps is planned
-([DESIGN.md section 16](../DESIGN.md#16-concept-model-and-contracts)).
+Steps share nothing but the source and the results they publish: each starts from its own copy
+of the checkout, and receives earlier steps' artifacts and output parameters by name.
 
 ## What you can customize
 
@@ -106,7 +113,7 @@ built from data. See the patterns below.
   they report.
 - The order of a run: the setup, then the source, then the stages.
 - How the source is fetched (shallowly, once per run) and where steps find it.
-- The placeholder namespaces: `param`, `values`, `setup`, `source`, `step`, `status`, and the outcome words
+- The placeholder namespaces: `param`, `values`, `setup`, `source`, `step`, `steps`, `status`, and the outcome words
   (`succeeded`, `failed`, `skipped`).
 - How Helm values are rendered (always strings) and how Argo expressions are escaped.
 - The available trigger kinds (`cron`).
@@ -192,7 +199,7 @@ by several pipelines.
    `status_reporter`; require the pipeline's context in branch protection.
 5. Add handlers for notifications and cleanup; triggers for schedules.
 6. `stagecraft check`, `stagecraft graph`, `stagecraft render`, then `helm template` with each
-   environment's values (chapter 10).
+   environment's values (chapter 11).
 
 ## Troubleshooting
 
@@ -213,6 +220,9 @@ a value needs quotes. Common render messages:
 | `must be a lowercase DNS label` | A stage or step name like `Verify` | Use `a-z`, `0-9`, `-` |
 | `status contexts need a status_reporter` / `need a pipeline source` | Statuses without their prerequisites | Add the reporter and a `source` |
 | `'{{ source.sha }}' needs a pipeline source` | A `{{ source.* }}` placeholder in a pipeline without one | Add `source=Source(...)` |
+| `'{{ steps.package.image.digst }}' is not an output of a step in an earlier stage` | A misspelled result, or one from the same or a later stage | Fix the name, or move the producing step to an earlier stage |
+| `input artifact 'app' is not bound` / `has no input artifact` | `inputs=` doesn't match the action's declared input artifacts | Bind every declared input artifact, and only those |
+| `comes from a step that may be skipped` | A result from a step or stage with `when` | Drop the condition, or don't depend on its results |
 | `unknown setup field 'sha'; available: [...]` | `{{ setup.sha }}` names an output the setup doesn't declare | Fix the name, or add it to the `TemplateRef`'s `outputs` |
 | `trigger 'nightly': required param 'env' has no value` | A trigger doesn't set a required param | Add it to the trigger's `params` |
 | `template name 'a-b-c' is generated twice` | Names like stage `a` + step `b-c` and stage `a-b` + step `c` | Rename a stage or step |

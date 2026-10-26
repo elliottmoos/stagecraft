@@ -106,7 +106,7 @@ An action is a unit with a typed contract, placed by a step. The framework's job
 
 | Action or step feature | Argo mechanism |
 |---|---|
-| Output parameters (slice 15) and artifact inputs and outputs (slice 16; section 16) | Template `outputs` with `globalName`, read by later steps as `{{workflow.outputs.parameters/artifacts.<name>}}` |
+| Output parameters and artifacts (slices 15 and 16, section 16) | Template `outputs` with `globalName`, read by later steps as `{{workflow.outputs.parameters/artifacts.<name>}}` |
 | Value references (`ctx.value(path, type)`, `{{ values.a.b }}`) | Helm expressions, each a required, typed property of the generated values schema |
 | Secret references | `secretKeyRef` env or volume; secret names come from Helm values, never secret contents |
 | Resources, retry, timeout, service account, node selection | Template fields, whose values come from Helm values |
@@ -242,14 +242,13 @@ Section 15 lists what was deliberately left out. Do not generalize before two or
 - Hook semantics: field names, expression scope, workflow-level `running` hooks, effect of a failing hook on workflow status, behavior on skipped nodes.
 - Template-level versus task-level hook firing.
 - Argo CD sync order for CRDs versus chart contents, if Argo CD deploys the chart.
-- For section 16, on kind with its MinIO: global output artifacts consumed by steps in later stages; an input artifact placed inside another (an artifact under the source checkout); `artifactGC` deleting objects when a workflow is deleted.
+- `artifactGC` deleting objects when a workflow is deleted, configured through the controller's `workflowDefaults` (Stagecraft emits none; section 16).
 
 ## 14. Open decisions
 
 - Commit the generated chart (section 16) to a repository, or publish it as a packaged chart.
 - Template naming across multiple releases in one namespace versus stable names in the Argo UI.
 - Whether a reference action library belongs in a third package.
-- Workflow TTL and the artifact GC service account (section 16): from the controller's `workflowDefaults`, or emitted per pipeline.
 - Whether to offer a resolved preview mode (render with a values file) for local debugging, or rely on `helm template`.
 
 ## 15. Deferred features
@@ -276,7 +275,7 @@ Accepted gaps (Argo or Helm behavior, not missing features) are kept with the me
 
 ## 16. Concept model and contracts
 
-Agreed 2026-10-25. This is the model slices 11 to 18 build toward (section 11); slices 11 to 15 are built. Where it conflicts with sections 5 to 8, those sections describe the current code and this section wins for new work. Points marked **open** are settled in the slice that builds them.
+Agreed 2026-10-25. This is the model slices 11 to 18 build toward (section 11); slices 11 to 16 are built. Where it conflicts with sections 5 to 8, those sections describe the current code and this section wins for new work. Points marked **open** are settled in the slice that builds them.
 
 ### Personas
 
@@ -315,7 +314,7 @@ There is no shared workspace concept any more (see "Files between steps").
 The only place an action author plugs in code.
 
 - **Configuration:** the action's own validated fields. Run inputs and Helm values arrive as placeholders in those fields; installation values also through `ctx.value(...)` in `compile`.
-- **Interface** (slices 15 and 16): its output parameters, declared the Hera way on the template `compile` returns (`outputs=[Parameter(name="digest", value_from=ValueFrom(path="/tmp/digest"))]`; decided in slice 15, so actions need no second declaration); and the artifacts it reads and writes, each a name and a path: `outputs = {"bin": "dist/app"}`, `inputs = {"bin": "dist/app"}`. A relative path is inside the main source checkout. Every declared input is required.
+- **Interface** (slices 15 and 16): its output parameters, declared the Hera way on the template `compile` returns (`outputs=[Parameter(name="digest", value_from=ValueFrom(path="/tmp/digest"))]`; decided in slice 15, so actions need no second declaration); and the artifacts it reads and writes, declared the same way (`outputs=[Artifact(name="bin", path="dist/app")]`, `inputs=[Artifact(name="bin", path="dist/app")]`; slice 16). A relative artifact path, or a relative `value_from` path of an output parameter, is inside the main source checkout. Every declared input artifact without a source of its own (a plain Hera `Artifact`, not optional) must be bound, and only those can be.
 - **Output:** exactly one Hera `Container` or `Script`. Template-level settings (retries, timeouts, service account) are allowed again, since no step shares a pod.
 - **Outcome:** exit code 0 means succeeded; anything else means failed.
 - **Rules:** pure (no I/O, env reads, or globals), no Helm syntax, no workflow-level Argo. Actions don't declare sources; sources are injected (below).
@@ -334,7 +333,7 @@ Stage("package", [
 
 Input references are `"<stage>.<step>.<artifact>"`. The render fails when a reference names a stage, step, or artifact that doesn't exist; names a step in the same or a later stage; names a step or stage that has a condition (it may be skipped, leaving no artifact); binds an input the action doesn't declare; or leaves a declared input unbound.
 
-Decided in slice 12 (2026-10-25): `Step(name, action, when=, status=, on_success=, on_failure=, finally_=)`. A bare action in a stage or handler list is shorthand for a step named after its class in kebab case, so two actions of one class in a stage need a `Step` each. Handler steps can set only a name. The status reporter is a bare action. Built in slice 12 without `inputs`, which come with artifacts (slice 15).
+Decided in slice 12 (2026-10-25): `Step(name, action, when=, status=, on_success=, on_failure=, finally_=)`. A bare action in a stage or handler list is shorthand for a step named after its class in kebab case, so two actions of one class in a stage need a `Step` each. Handler steps can set only a name. The status reporter is a bare action. `inputs` (slice 16) binds the action's input artifacts; handler and setup steps can't take inputs.
 
 ### The setup step and outputs
 
@@ -344,7 +343,7 @@ Decided 2026-10-25, built in slice 15. Argo Events submits CI runs with the whol
 - **`{{ setup.<output> }}`** works in the source's fields, every step, `when` (quoted, like params), handlers, and the status reporter. A reference to an undeclared output fails the render.
 - **Lowering.** The setup runs inside a generated `steps` template (`setup`, with the action's template `setup-<step>`) whose outputs re-publish each output parameter with a `globalName` (`stagecraft-setup-<output>`), so placeholders lower to `{{workflow.outputs.parameters.stagecraft-setup-<output>}}` and need no routing. Verified on kind in slice 15: a `steps` template's outputs become global outputs, while a `dag` template's outputs with a `globalName` never do (the node has them, the workflow doesn't), and a container can't re-publish an input as an output without a file path.
 - **Linting.** `argo lint --offline` resolves a `templateRef` only against the files it is given (verified), so CI lints the rendered chart together with the referenced WorkflowTemplate's manifest.
-- **Ordinary steps' outputs** use the same mechanism in slice 16: an action declares output parameters, and later steps, conditions, and handlers use `{{ steps.<stage>.<step>.<output> }}`, checked to come from an earlier stage.
+- **Ordinary steps' outputs** use the same mechanism (built in slice 16): each step's output parameters and artifacts get `globalName` `stagecraft-<stage>-<step>-<output>`; later stages' steps, conditions, and handlers use `{{ steps.<stage>.<step>.<output> }}`, and pipeline handlers can use any stage's (empty if the step didn't run). References must come from an earlier stage and not from a step or stage with `when`; the status reporter, the setup, and the source can't use them.
 - If the setup fails, the run fails before the source step; `{{ setup.* }}` then has no value, as with a failed source step.
 
 ### Sources and revisions
@@ -363,8 +362,8 @@ Decided 2026-10-25, built in slice 15. Argo Events submits CI runs with the whol
 
 - Each step has private scratch: its own container filesystem, including its copy of the sources.
 - Anything that crosses a step boundary is an artifact (sources included), stored in the controller's default artifact repository. Ours is S3-compatible (RustFS). Stagecraft emits no repository configuration.
-- Cross-stage references go through global outputs (revised 2026-10-25, after slice 14 verified that a step's global outputs are readable from sub-DAG tasks, exit hooks, and `onExit`): the producing step's output artifact gets a generated `globalName` (`stagecraft-<stage>-<step>-<artifact>`), and the consuming step receives it from `{{workflow.outputs.artifacts.<globalName>}}`. No routing through stage DAG outputs and inputs. Authors only write `"<stage>.<step>.<artifact>"`; the render checks the producer is in an earlier stage.
-- **Retention:** Stagecraft sets `artifactGC.strategy: OnWorkflowDeletion`. Deletion therefore needs workflows to be deleted, and the GC pods need a service account allowed to delete from the bucket. **Open:** whether both come from the controller's `workflowDefaults` (recommended: platform settings, like the artifact repository) or from the pipeline.
+- Cross-stage references go through global outputs (revised 2026-10-25, after slice 14 verified that a step's global outputs are readable from sub-DAG tasks, exit hooks, and `onExit`; built in slice 16, which verified that outputs of a step inside a stage's sub-DAG reach later stages, and that an input artifact can be placed inside the checkout, in either order): the producing step's output artifact gets a generated `globalName` (`stagecraft-<stage>-<step>-<artifact>`), and the consuming step receives it from `{{workflow.outputs.artifacts.<globalName>}}`. No routing through stage DAG outputs and inputs. Authors only write `"<stage>.<step>.<artifact>"`; the render checks the producer is in an earlier stage.
+- **Retention** (decided 2026-10-25, slice 16): Stagecraft emits no `artifactGC` and no TTL. The platform sets `artifactGC` (strategy `OnWorkflowDeletion`, a service account allowed to delete from the bucket) and a `ttlStrategy` once in the controller's `workflowDefaults`, like the artifact repository: pipelines stay identical everywhere, and a misconfigured GC (which can leave deleted workflows on a finalizer) is the platform's to fix in one place.
 - Removed: `Workspace`, the `containerset` strategy, the per-run claim, `workspace="read"/"write"`, the writer rule, and the reserved `workspace` name.
 - Caches that outlive a run are a separate concept, out of scope for now (section 15).
 

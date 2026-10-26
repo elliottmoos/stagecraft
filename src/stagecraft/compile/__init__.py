@@ -11,7 +11,7 @@ from hera.workflows import DAG, CronWorkflow, Parameter, Task, WorkflowTemplate
 from hera.workflows.models import Arguments, ContinueOn, LifecycleHook, WorkflowTemplateRef
 from hera.workflows.models import Parameter as ParameterModel
 
-from stagecraft.compile import setup, source
+from stagecraft.compile import outputs, setup, source
 from stagecraft.compile.placeholders import Scopes, lower, lower_model
 from stagecraft.context import CompileContext
 from stagecraft.errors import CompileError
@@ -80,14 +80,21 @@ def compile_pipeline(pipeline: Pipeline, ctx: CompileContext) -> WorkflowTemplat
                 "pipeline-status-pending", pipeline.status, "pending", "Running", depends=depends
             )
         )
+    # Step outputs published so far: a stage's steps, conditions, and handlers see those of
+    # earlier stages; pipeline handlers see all of them. The status reporter sees none.
+    produced: dict[outputs.Key, outputs.Produced] = {}
     for stage in pipeline.stages:
         where = f"pipeline {pipeline.name!r}, stage {stage.name!r}"
-        stage_dag, step_templates = _compile_stage(pipeline, stage, lowering)
+        stage_lowering = dataclasses.replace(lowering, steps=outputs.scope(produced))
+        stage_dag, step_templates, stage_produced = _compile_stage(
+            pipeline, stage, stage_lowering, produced
+        )
         hooks, hook_templates = _compile_exit_hook(
-            stage, task=stage.name, path=stage.name, lowering=lowering, where=where
+            stage, task=stage.name, path=stage.name, lowering=stage_lowering, where=where
         )
         templates += [stage_dag, *step_templates, *hook_templates]
-        when = _lower_when(stage.when, lowering, where)
+        when = _lower_when(stage.when, stage_lowering, where)
+        produced |= stage_produced
         reports, stage_depends = _status_tasks(stage, stage.name, depends=depends, when=when)
         main_tasks += reports
         main_tasks.append(
@@ -98,7 +105,9 @@ def compile_pipeline(pipeline: Pipeline, ctx: CompileContext) -> WorkflowTemplat
     if pipeline.status_contexts:
         templates[1:1] = _compile_status_reporter(pipeline, lowering)
 
-    exit_handler = _compile_exit_handler(pipeline, lowering)
+    exit_handler = _compile_exit_handler(
+        pipeline, dataclasses.replace(lowering, steps=outputs.scope(produced))
+    )
     templates += exit_handler
     _check_unique_template_names(pipeline, templates)
 
@@ -145,10 +154,11 @@ class _Lowering:
     ctx: CompileContext
     setup: Mapping[str, str] | None = None
     source: Mapping[str, str] | None = None
+    steps: Mapping[str, str] | None = None
 
     @property
     def scopes(self) -> Scopes:
-        scopes = {"setup": self.setup, "source": self.source}
+        scopes = {"setup": self.setup, "source": self.source, "steps": self.steps}
         return {name: fields for name, fields in scopes.items() if fields is not None}
 
 
@@ -204,17 +214,28 @@ def _compile_param(param: Param) -> Parameter:
     return Parameter(name=param.name, **{k: v for k, v in fields.items() if v is not None})
 
 
-def _compile_stage(pipeline: Pipeline, stage: Stage, lowering: _Lowering):
+def _compile_stage(
+    pipeline: Pipeline,
+    stage: Stage,
+    lowering: _Lowering,
+    produced: Mapping[outputs.Key, outputs.Produced],
+):
+    """The stage's DAG, its templates, and what its steps publish for later stages."""
     tasks = []
     templates = []
+    stage_produced = {}
     for step in stage.steps:
         name = f"{stage.name}-{step.name}"
         where = f"pipeline {pipeline.name!r}, stage {stage.name!r}, step {step.name!r}"
         template = _compile_action(step.action, name=name, lowering=lowering, where=where)
-        arguments = None
+        conditional = stage.when is not None or step.when is not None
+        template, stage_produced[stage.name, step.name] = outputs.publish(
+            template, (stage.name, step.name), bool(lowering.source), conditional, where
+        )
+        arguments = outputs.bind(template, step.inputs, produced, where)
         if lowering.source:
             template = source.inject(template, where)
-            arguments = [source.argument()]
+            arguments.append(source.argument())
         hooks, hook_templates = _compile_exit_hook(
             step,
             task=step.name,
@@ -230,13 +251,13 @@ def _compile_stage(pipeline: Pipeline, stage: Stage, lowering: _Lowering):
             Task(
                 name=step.name,
                 template=template,
-                arguments=arguments,
+                arguments=arguments or None,
                 depends=depends,
                 when=when,
                 hooks=hooks,
             )
         )
-    return DAG(name=stage.name, tasks=tasks), templates
+    return DAG(name=stage.name, tasks=tasks), templates, stage_produced
 
 
 def _compile_exit_hook(step: Step | Stage, task: str, path: str, lowering: _Lowering, where: str):

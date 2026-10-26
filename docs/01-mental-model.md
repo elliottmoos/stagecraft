@@ -88,7 +88,7 @@ Stagecraft writes `Chart.yaml`, `values.schema.json`, and `templates/`, and noth
 |---|---|---|
 | Action classes: their fields and the container they compile to | Pipelines, stages, steps, params, conditions, handlers, statuses, triggers | How stages become an Argo DAG, how handlers and statuses are wired, how Helm values are rendered and escaped |
 
-Chapter 11 maps this out in detail. For now, the short version: **actions are open, the pipeline
+Chapter 12 maps this out in detail. For now, the short version: **actions are open, the pipeline
 structure is closed.** You can make an action do anything a container can do, and you combine
 actions with a small, fixed vocabulary.
 

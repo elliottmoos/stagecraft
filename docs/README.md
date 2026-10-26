@@ -2,8 +2,8 @@
 
 This guide takes you from nothing to designing your own pipelines. Each chapter adds one layer
 on top of the previous ones, and all of them build the same project: a CI pipeline called
-`service-ci` that checks out a service, lints and tests it, builds an image, optionally deploys
-it, reports GitHub checks, and runs nightly.
+`service-ci` that checks out a service, lints and tests it, builds it once, puts the build in an
+image, optionally deploys it, reports GitHub checks, and runs nightly.
 
 Read it in order the first time. Afterwards, the [reference](reference.md) has everything on one
 page.
@@ -19,10 +19,11 @@ page.
 | [5. Stages, params, and conditions](05-stages-and-flow.md) | How stages run, per-run params, `when` conditions | 4 |
 | [6. Handlers](06-handlers.md) | `on_success`, `on_failure`, and `finally_` on steps, stages, and the pipeline | 5 |
 | [7. Sources](07-sources.md) | Checking out the code once per run, at one commit, for every step; a setup step that parses webhook payloads | 6 |
-| [8. Commit statuses](08-commit-statuses.md) | GitHub checks for the pipeline and its steps, through your own reporter action | 7 |
-| [9. Triggers](09-triggers.md) | Running pipelines on a schedule | 8 |
-| [10. Shipping pipelines](10-shipping.md) | Committing and installing the generated chart; checks in CI | 9 |
-| [11. Designing pipelines](11-designing-pipelines.md) | The finished pipeline; exactly what you can customize; patterns; troubleshooting | all |
+| [8. Passing results between steps](08-passing-results.md) | Output parameters and artifacts from earlier steps; retention | 7 |
+| [9. Commit statuses](09-commit-statuses.md) | GitHub checks for the pipeline and its steps, through your own reporter action | 8 |
+| [10. Triggers](10-triggers.md) | Running pipelines on a schedule | 9 |
+| [11. Shipping pipelines](11-shipping.md) | Committing and installing the generated chart; checks in CI | 10 |
+| [12. Designing pipelines](12-designing-pipelines.md) | The finished pipeline; exactly what you can customize; patterns; troubleshooting | all |
 
 ## Before you start
 
