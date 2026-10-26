@@ -13,6 +13,7 @@ from fixtures.pipelines import (
     setup,
     smoke,
     source,
+    stage_sources,
     status,
     triggers,
 )
@@ -38,6 +39,7 @@ PIPELINES = [
     setup.pipeline,
     setup.action_pipeline,
     outputs.pipeline,
+    stage_sources.pipeline,
 ]
 
 

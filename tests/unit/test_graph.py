@@ -158,3 +158,18 @@ def test_artifacts_flow_from_producer_to_consumer():
     )
 
     assert "  s0b0 -->|bin| s1b0" in mermaid(pipeline).splitlines()
+
+
+def test_a_stage_lists_its_sources():
+    pipeline = Pipeline(
+        name="p",
+        stages=[
+            Stage(
+                "e2e",
+                [Shell(script="")],
+                sources=[Source(name="fixtures", url="https://x/f.git", revision="v2")],
+            )
+        ],
+    )
+
+    assert '  subgraph s0["e2e<br/>sources: fixtures"]' in mermaid(pipeline).splitlines()

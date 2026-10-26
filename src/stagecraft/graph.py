@@ -59,6 +59,8 @@ def mermaid(pipeline: Pipeline) -> str:
 
 def _label(name: str, step: Stage | Step) -> str:
     parts = [name]
+    if isinstance(step, Stage) and step.sources:
+        parts.append(f"sources: {', '.join(str(src.name) for src in step.sources)}")
     if step.when:
         parts.append(f"when: {step.when}")
     if step.status:

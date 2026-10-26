@@ -86,11 +86,12 @@ def compile_pipeline(pipeline: Pipeline, ctx: CompileContext) -> WorkflowTemplat
     for stage in pipeline.stages:
         where = f"pipeline {pipeline.name!r}, stage {stage.name!r}"
         stage_lowering = dataclasses.replace(lowering, steps=outputs.scope(produced))
-        stage_dag, step_templates, stage_produced = _compile_stage(
+        stage_dag, step_templates, stage_produced, inner_lowering = _compile_stage(
             pipeline, stage, stage_lowering, produced
         )
+        # The stage's handlers run after it, so they see its sources; its `when` doesn't.
         hooks, hook_templates = _compile_exit_hook(
-            stage, task=stage.name, path=stage.name, lowering=stage_lowering, where=where
+            stage, task=stage.name, path=stage.name, lowering=inner_lowering, where=where
         )
         templates += [stage_dag, *step_templates, *hook_templates]
         when = _lower_when(stage.when, stage_lowering, where)
@@ -204,7 +205,9 @@ def _compile_source(pipeline: Pipeline, lowering: _Lowering):
             )
         except CompileError as e:
             raise CompileError(f"pipeline {pipeline.name!r}, source {field}: {e}") from e
-    template = source.source_step(fields["url"], fields["revision"], lowering.ctx)
+    template = source.source_step(
+        source.MAIN, source.TASK, fields["url"], fields["revision"], lowering.ctx
+    )
     return dataclasses.replace(lowering, source={**fields, "sha": source.SHA}), template
 
 
@@ -220,22 +223,51 @@ def _compile_stage(
     lowering: _Lowering,
     produced: Mapping[outputs.Key, outputs.Produced],
 ):
-    """The stage's DAG, its templates, and what its steps publish for later stages."""
+    """The stage's DAG, its templates, what its steps publish for later stages, and the lowering
+    inside the stage (with its sources' placeholders)."""
     tasks = []
     templates = []
     stage_produced = {}
+    has_main_source = bool(lowering.source)
+    checkouts = [source.MAIN] if has_main_source else []
+    stage_fields = {}
+    for src in stage.sources:
+        assert src.name is not None  # guaranteed by Stage validation
+        checkout = source.for_stage(stage.name, src.name)
+        fields = {}
+        for field in ("url", "revision"):
+            try:
+                fields[field] = lower(
+                    getattr(src, field), lowering.names, lowering.scopes, values=lowering.ctx.value
+                )
+            except CompileError as e:
+                raise CompileError(
+                    f"pipeline {pipeline.name!r}, stage {stage.name!r}, source {src.name!r} "
+                    f"{field}: {e}"
+                ) from e
+        fetch = source.source_step(
+            checkout, f"{stage.name}-{checkout.task}", fields["url"], fields["revision"],
+            lowering.ctx,
+        )  # fmt: skip
+        templates.append(fetch)
+        tasks.append(Task(name=checkout.task, template=fetch))
+        checkouts.append(checkout)
+        stage_fields |= {f"{src.name}.{k}": v for k, v in {**fields, "sha": checkout.sha}.items()}
+    if stage_fields:
+        lowering = dataclasses.replace(lowering, source={**(lowering.source or {}), **stage_fields})
+    step_depends = " && ".join(c.task for c in checkouts if c is not source.MAIN) or None
     for step in stage.steps:
         name = f"{stage.name}-{step.name}"
         where = f"pipeline {pipeline.name!r}, stage {stage.name!r}, step {step.name!r}"
         template = _compile_action(step.action, name=name, lowering=lowering, where=where)
         conditional = stage.when is not None or step.when is not None
         template, stage_produced[stage.name, step.name] = outputs.publish(
-            template, (stage.name, step.name), bool(lowering.source), conditional, where
+            template, (stage.name, step.name), has_main_source, conditional, where
         )
         arguments = outputs.bind(template, step.inputs, produced, where)
-        if lowering.source:
-            template = source.inject(template, where)
-            arguments.append(source.argument())
+        if checkouts:
+            template = source.inject(template, checkouts, where)
+            arguments += [source.argument(c) for c in checkouts]
         hooks, hook_templates = _compile_exit_hook(
             step,
             task=step.name,
@@ -245,7 +277,7 @@ def _compile_stage(
         )
         templates += [template, *hook_templates]
         when = _lower_when(step.when, lowering, where)
-        reports, depends = _status_tasks(step, step.name, depends=None, when=when)
+        reports, depends = _status_tasks(step, step.name, depends=step_depends, when=when)
         tasks += reports
         tasks.append(
             Task(
@@ -257,7 +289,7 @@ def _compile_stage(
                 hooks=hooks,
             )
         )
-    return DAG(name=stage.name, tasks=tasks), templates, stage_produced
+    return DAG(name=stage.name, tasks=tasks), templates, stage_produced, lowering
 
 
 def _compile_exit_hook(step: Step | Stage, task: str, path: str, lowering: _Lowering, where: str):

@@ -157,7 +157,7 @@ public `octocat/Hello-World` repository from GitHub, so the kind cluster needs n
   phases. The status reporter keeps host-style states (`success`, `failure`, `error`).
 - There is no shared filesystem: each step runs in its own pod, and files will cross step
   boundaries only as artifacts (decided 2026-10-25). Don't add volumes shared between steps.
-- `DESIGN.md` section 16 is the target model for the next slices (stage sources, conditions).
+- `DESIGN.md` section 16 is the target model; the condition API (slice 18) is what's left.
 - Step outputs and artifacts are declared the Hera way on the action's template; Stagecraft adds
   `globalName`s and binds inputs. It emits no artifact GC or TTL: those are controller defaults. Read it before changing the authoring model.
 - Hera's API changes between versions, so check the pinned version's docs rather than guessing.

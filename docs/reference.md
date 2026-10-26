@@ -41,12 +41,16 @@ the pipeline. `setup` and `source` are reserved stage names.
 
 Lint the rendered chart together with the referenced WorkflowTemplate's manifest.
 
-## `Source(url=, revision=)`
+## `Source(url=, revision=, name=)`
 
 | Field | Type | Notes |
 |---|---|---|
 | `url` | str | What `git fetch` takes; may use `{{ param.x }}` and `{{ values.a.b }}` |
-| `revision` | str | A commit SHA, branch, or tag, resolved to one commit at the start of the run; may use placeholders |
+| `revision` | str | A commit SHA, branch, or tag, resolved to one commit when the source is fetched; may use placeholders |
+| `name` | str | None for the pipeline's source (it's `main`); required for a stage's sources, unique in the stage, not `main` |
+
+A stage's sources are fetched by a `source-<name>` step at the start of the stage, and each of its
+steps gets them at `/sources/<name>` (`STAGECRAFT_SOURCE_<NAME>`).
 
 Every step gets the checkout (shallow, with `.git`) at `/sources/main`, its working directory
 unless the action sets one, with `STAGECRAFT_SOURCE_MAIN` set to that path. Handlers and the
@@ -65,6 +69,7 @@ status reporter get no checkout. The source step needs two Helm values:
 | `steps` | list[Step \| Action] | required (positional) | At least one; unique step names; run in parallel |
 | `when` | str | None | Argo condition; `{{ param.x }}` is quoted inside it |
 | `status` | str | None | Commit-status context |
+| `sources` | list[Source] | `[]` | Extra repositories, checked out at the start of the stage for its steps |
 | `on_success`, `on_failure`, `finally_` | list[Step \| Action] | `[]` | Handlers |
 
 Wherever a list takes `Step | Action`, a bare action is a step named after its class in kebab case
@@ -144,6 +149,7 @@ chart it generated (a `Chart.yaml` with the annotation).
 | `{{ values.a.b }}` | action fields, `when`, trigger params, source fields | A Helm expression for `.Values.a.b` |
 | `{{ setup.<output> }}` | action fields, `when`, source fields, with a `setup` | The setup's output parameter, as a global output; quoted in `when` |
 | `{{ steps.<stage>.<step>.<output> }}` | action fields, `when`, and handlers, in later stages; pipeline handlers | An earlier step's output parameter, as a global output; quoted in `when` |
+| `{{ source.<name>.url }}`, `{{ source.<name>.revision }}`, `{{ source.<name>.sha }}` | the stage's steps and their `when`, and the handlers of the stage and its steps | A stage source's URL, revision as given, and commit |
 | `{{ source.url }}`, `{{ source.revision }}`, `{{ source.sha }}` | action fields, `when`, with a `source` | The source's URL and revision as given, and the commit it resolved to; quoted in `when` |
 | `{{ step.name }}`, `{{ step.outcome }}` | handler action fields | The path (`stage` or `stage/step`), or the run's name in pipeline handlers; and `succeeded` or `failed` |
 | `{{ status.context }}`, `{{ status.state }}`, `{{ status.description }}` | `status_reporter` fields | The report being posted |
@@ -170,6 +176,7 @@ Values always render as strings.
 | Entrypoint DAG | `main` |
 | The setup step and its action | `setup`, `setup-<step>` |
 | The source step | `source` |
+| A stage source's step (task `source-<name>` in the stage) | `<stage>-source-<name>` |
 | A stage's DAG | `<stage>` |
 | A step | `<stage>-<step>` |
 | A step's handler DAG / a handler | `<stage>[-<step>]-on-exit` / `<stage>[-<step>]-<on-success\|on-failure\|finally>-<handler>[-succeeded\|-failed]` |

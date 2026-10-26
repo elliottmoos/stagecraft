@@ -165,7 +165,9 @@ pipeline = Pipeline(
 - **The source** is checked out once, before the first stage, at the commit `revision` resolves
   to; every step starts in its own copy of the checkout (`/sources/main`,
   `$STAGECRAFT_SOURCE_MAIN`). The git image and credentials Secret are the Helm values
-  `stagecraft.sources.image` and `stagecraft.sources.secret`.
+  `stagecraft.sources.image` and `stagecraft.sources.secret`. A stage can add its own sources
+  (`Stage(..., sources=[Source(name="fixtures", ...)])`), fetched when it starts, at
+  `/sources/<name>`, for its steps only (`{{ source.<name>.sha }}`).
 - **A setup step** (`setup=`, an action or a `TemplateRef` to an existing WorkflowTemplate) runs
   before everything else; its output parameters work everywhere as `{{ setup.<output> }}`, for
   example to take the source's URL and commit from a webhook payload.
@@ -263,8 +265,8 @@ pipelines refer to by name come from wherever you deploy them today.
 
 ## Known gaps
 
-- **Not built yet**: sources per stage and the typed condition API (DESIGN.md section 16), and
-  structured (object or array) values.
+- **Not built yet**: the typed condition API (DESIGN.md section 16), and structured (object or
+  array) values.
 - **Right after an install that creates a trigger**, its first ticks can be missed: Helm applies
   the CronWorkflow before the WorkflowTemplate it references, and Argo re-checks the cron only
   minutes later (at most 20).

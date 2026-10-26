@@ -179,10 +179,15 @@ class Step(_Node):
 
 class Stage(_Node):
     """An ordered phase of a pipeline. Its steps run in parallel; a bare action is a step named
-    after its class."""
+    after its class.
+
+    `sources` are extra repositories checked out at the start of the stage, resolved to their
+    commits then, for this stage's steps only (see Source).
+    """
 
     name: Name
     steps: Annotated[list[Step], Field(min_length=1)]
+    sources: list["Source"] = []
 
     def __init__(self, name: str, steps: list[Step | Action], /, **data) -> None:
         super().__init__(name=name, steps=steps, **data)
@@ -198,6 +203,26 @@ class Stage(_Node):
     @model_validator(mode="after")
     def _check_step_names(self) -> Self:
         _check_step_names(f"stage {self.name!r}", self.steps)
+        return self
+
+    @model_validator(mode="after")
+    def _check_sources(self) -> Self:
+        where = f"stage {self.name!r}"
+        for src in self.sources:
+            if src.name is None:
+                raise ValueError(f"{where}: stage sources need a name (Source(name=..., ...))")
+            if src.name == "main":
+                raise ValueError(f"{where}: source name 'main' is reserved for the pipeline's")
+        names = [src.name for src in self.sources]
+        if dupes := _duplicates(names):
+            raise ValueError(f"{where}: duplicate source name {dupes[0]!r}")
+        tasks = {f"source-{name}": name for name in names}
+        for step in self.steps:
+            if step.name in tasks:
+                raise ValueError(
+                    f"{where}: step name {step.name!r} is taken by the stage's source "
+                    f"{tasks[step.name]!r}"
+                )
         return self
 
 
@@ -251,11 +276,17 @@ class TemplateRef(_Model):
 
 class Source(_Model):
     """A repository at a revision: a commit SHA, or a branch or tag, which is resolved to its
-    commit once, at the start of the run. `url` is what `git fetch` takes. Both may use
-    `{{ param.x }}` and `{{ values.a.b }}`."""
+    commit once. `url` is what `git fetch` takes. Both may use `{{ param.x }}` and
+    `{{ values.a.b }}`.
+
+    The pipeline's source is "main" and needs no name. A stage's sources need a name, which
+    places them at /sources/<name> (STAGECRAFT_SOURCE_<NAME>) and names their placeholders
+    (`{{ source.<name>.sha }}`).
+    """
 
     url: str
     revision: str
+    name: Name | None = None
 
 
 class Trigger(_Model):
@@ -330,6 +361,13 @@ class Pipeline(_Model):
     @classmethod
     def _wrap_handlers(cls, items: object) -> object:
         return _as_steps(items)
+
+    @field_validator("source")
+    @classmethod
+    def _check_source_name(cls, source: "Source | None") -> "Source | None":
+        if source is not None and source.name not in (None, "main"):
+            raise ValueError("the pipeline's source is named 'main'; leave its name unset")
+        return source
 
     @field_validator("setup", mode="before")
     @classmethod

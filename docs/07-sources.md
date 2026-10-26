@@ -48,6 +48,31 @@ Things to know:
   before any stage, and `{{ source.sha }}` has no value.
 - **`source` is a reserved stage name.**
 
+## Sources for one stage
+
+Sometimes one stage needs a second repository: end-to-end tests against a fixtures repo, a
+deployment that applies manifests from another repo. A stage can declare its own sources:
+
+```python
+Stage(
+    "e2e",
+    [Make(target="e2e")],
+    sources=[Source(name="fixtures", url="https://github.com/example/fixtures.git", revision="v2")],
+)
+```
+
+- **Fetched when the stage starts.** A generated step, `source-<name>`, runs first in the stage
+  and resolves the revision to a commit then; the stage's steps wait for it, so they all see that
+  commit.
+- **Beside the main checkout.** Each of the stage's steps gets it at `/sources/<name>`, with
+  `STAGECRAFT_SOURCE_<NAME>` (uppercased, `-` as `_`) set to that path. The working directory
+  stays the pipeline's own checkout. Steps in other stages don't get it.
+- **Placeholders by name.** `{{ source.<name>.url }}`, `{{ source.<name>.revision }}`, and
+  `{{ source.<name>.sha }}` work in the stage's steps (and their `when`) and in the handlers of
+  the stage and its steps, not in the stage's own `when`, which is decided before it starts.
+- **Names.** A stage source needs a `name`, unique in the stage; `main` is the pipeline's
+  source, and no step in the stage can be named `source-<name>`.
+
 ## When the revision comes from a webhook: the setup step
 
 Runs started by Argo Events often receive the whole GitHub webhook payload as one param, and the
@@ -170,6 +195,8 @@ kubectl create secret generic github-checkout -n argo \
 - Every step starts in the checkout (`/sources/main`, `$STAGECRAFT_SOURCE_MAIN`); handlers and the
   reporter get only `{{ source.url }}`, `{{ source.revision }}`, and `{{ source.sha }}`.
 - The installation supplies `stagecraft.sources.image` and `stagecraft.sources.secret`.
+- A stage can add its own sources (`Stage(..., sources=[Source(name=..., ...)])`), fetched when it
+  starts, at `/sources/<name>`, for its steps only.
 - A setup step (`TemplateRef` or an action) runs first; its outputs work everywhere as
   `{{ setup.<output> }}`, the source's fields included.
 
