@@ -1,4 +1,4 @@
-# Stagecraft
+<h1><img src="docs/logo.svg" alt="Stagecraft" width="342"></h1>
 
 Stagecraft compiles CI/CD pipelines, written in Python as ordered **stages** of parallel
 **steps**, into Argo Workflows `WorkflowTemplate` (and, for schedules, `CronWorkflow`)

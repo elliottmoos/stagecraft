@@ -106,6 +106,9 @@ uv run stagecraft contexts <pipeline files or dirs>
 ./scripts/kind-ui.sh                     # Argo UI at https://localhost:2746 (port-forward)
 kind delete cluster --name stagecraft
 
+# Regenerate docs/logo.svg and docs/logo-mark.svg (font download steps in the script)
+uv run --no-project --with fonttools --with uharfbuzz python scripts/build_logo.py <font.ttf> docs
+
 # Regenerate kubeconform schemas when bumping Argo (also updates ARGO_VERSION)
 uv run python scripts/gen_crd_schemas.py <argo-version> tests/fixtures/crd-schemas
 ```

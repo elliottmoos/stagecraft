@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64.0 64" width="64" height="64" role="img" aria-labelledby="title">
+  <title id="title">Stagecraft</title>
+  <style>
+    .ink { fill: #1a1e29; }
+    .edge { stroke: #1a1e29; }
+    @media (prefers-color-scheme: dark) {
+      .ink { fill: #eef0f4; }
+      .edge { stroke: #eef0f4; }
+    }
+  </style>
+  <g fill="none" class="edge" stroke-width="3.2" stroke-linecap="round">
+    <path d="M14 32 L32 13 M14 32 L32 32 M14 32 L32 51 M32 13 L50 32 M32 32 L50 32 M32 51 L50 32"/>
+  </g>
+  <rect class="ink" x="6" y="25" width="14" height="14" rx="3.5"/>
+  <rect x="25" y="6" width="14" height="14" rx="3.5" fill="#e8a317"/>
+  <rect x="25" y="25" width="14" height="14" rx="3.5" fill="#e8a317"/>
+  <rect x="25" y="44" width="14" height="14" rx="3.5" fill="#e8a317"/>
+  <rect class="ink" x="44" y="25" width="14" height="14" rx="3.5"/>
+</svg>
