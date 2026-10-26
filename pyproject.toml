@@ -1,14 +1,15 @@
 [project]
 name = "stagecraft"
 version = "0.0.1"
-description = "Author CI/CD pipelines as stages of blocks and compile them to Helm-compatible Argo Workflows templates."
+description = "Author CI/CD pipelines as stages of steps and compile them into a Helm chart of Argo Workflows templates."
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     # Hera is pinned exactly: its API and generated models change between releases.
     "hera==7.1.0",
     "pydantic>=2.14,<3",
-    "jsonschema>=4.26,<5",
     "pyyaml>=6.0.3,<7",
     "typer>=0.27,<1",
 ]
