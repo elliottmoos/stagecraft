@@ -158,6 +158,7 @@ A new `build` stage compiles the service once; `package` puts that binary in the
 publishes the image's digest, which `deploy` hands to the deployment:
 
 ```python file=pipelines/service_ci.py
+from stagecraft.conditions import param
 from stagecraft.spec import Param, Pipeline, Source, Stage, Step
 
 from actions import Make, Notify
@@ -206,7 +207,7 @@ pipeline = Pipeline(
                     ),
                 )
             ],
-            when="{{ param.deploy }} == 'true'",
+            when=param("deploy") == "true",
         ),
     ],
     on_failure=[Notify(message="{{ step.name }} {{ step.outcome }}")],

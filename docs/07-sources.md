@@ -129,6 +129,7 @@ The `prepare` stage was a stand-in; the source replaces it, and the `repo` and `
 way to one `revision`:
 
 ```python file=pipelines/service_ci.py
+from stagecraft.conditions import param
 from stagecraft.spec import Param, Pipeline, Source, Stage, Step
 
 from actions import Make, Notify
@@ -157,7 +158,7 @@ pipeline = Pipeline(
         Stage(
             "deploy",
             [Step("staging", Make(target="deploy-staging"))],
-            when="{{ param.deploy }} == 'true'",
+            when=param("deploy") == "true",
         ),
     ],
     on_failure=[Notify(message="{{ step.name }} {{ step.outcome }}")],

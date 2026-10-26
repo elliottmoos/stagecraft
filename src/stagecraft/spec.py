@@ -7,6 +7,7 @@ from typing import Annotated, Self
 from hera.workflows import Container, Script
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from stagecraft.conditions import Condition, Operand
 from stagecraft.context import CompileContext
 
 _DNS_LABEL = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
@@ -112,8 +113,9 @@ class _Node(_Model):
     """What steps and stages share: a condition, a commit status, and handlers that run after
     they finish.
 
-    `when` is an Argo condition. Inside it `{{ param.x }}` is a quoted string, so compare it with
-    quoted values: `when="{{ param.deploy }} == 'true'"`.
+    `when` is a condition from stagecraft.conditions (`when=param("deploy") == "true"`), or a raw
+    Argo expression in which placeholders become quoted strings, so compare them with quoted
+    values: `when="{{ param.deploy }} == 'true'"`. A condition is stored as that raw form.
 
     Handlers are steps run from the node's Argo `exit` hook (a bare action is a step named after
     its class). `on_success` runs when the node succeeds, `on_failure` when it fails or errors,
@@ -142,6 +144,13 @@ class _Node(_Model):
     @classmethod
     def _wrap_handlers(cls, items: object) -> object:
         return _as_steps(items)
+
+    @field_validator("when", mode="before")
+    @classmethod
+    def _render_condition(cls, when: object) -> object:
+        if isinstance(when, Operand):
+            raise ValueError("an operand isn't a condition: compare it, as in param('x') == 'y'")
+        return when.render() if isinstance(when, Condition) else when
 
     @model_validator(mode="after")
     def _check_handlers(self) -> Self:

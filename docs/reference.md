@@ -7,6 +7,7 @@ Everything in one place. The [guide](README.md) explains each item in context.
 | Import | What |
 |---|---|
 | `from stagecraft.spec import Pipeline, Source, Stage, Step, Action, Param, TemplateRef, Trigger` | The authoring models |
+| `from stagecraft.conditions import param, value, source, setup, output` | Operands for typed `when` conditions |
 | `from stagecraft.context import CompileContext` | The `ctx` passed to `Action.compile` |
 | `from stagecraft.compile import compile_pipeline, compile_triggers` | Compile in tests |
 | `from stagecraft.chart import render_chart` | The generated chart's files, by path |
@@ -67,7 +68,7 @@ status reporter get no checkout. The source step needs two Helm values:
 |---|---|---|---|
 | `name` | str | required (positional) | DNS label |
 | `steps` | list[Step \| Action] | required (positional) | At least one; unique step names; run in parallel |
-| `when` | str | None | Argo condition; `{{ param.x }}` is quoted inside it |
+| `when` | Condition \| str | None | A typed condition (below), or a raw Argo expression in which placeholders are quoted strings |
 | `status` | str | None | Commit-status context |
 | `sources` | list[Source] | `[]` | Extra repositories, checked out at the start of the stage for its steps |
 | `on_success`, `on_failure`, `finally_` | list[Step \| Action] | `[]` | Handlers |
@@ -141,12 +142,26 @@ arguments.
 `render` replaces these and nothing else. It writes only into a missing or empty directory, or a
 chart it generated (a `Chart.yaml` with the annotation).
 
+## Conditions (`stagecraft.conditions`)
+
+| Operand | Stands for |
+|---|---|
+| `param("x")` | `{{ param.x }}` |
+| `value("a.b")` | `{{ values.a.b }}` |
+| `source("sha")`, `source("<name>.sha")` | `{{ source.sha }}`, a stage source's `{{ source.<name>.sha }}` |
+| `setup("x")` | `{{ setup.x }}` |
+| `output("<stage>.<step>.<output>")` | `{{ steps.<stage>.<step>.<output> }}` |
+
+Compare an operand with `==` or `!=` to a string (no single quotes) or another operand; combine
+conditions with `&`, `|`, and `~`, each comparison in parentheses. A condition renders to the
+raw form (`{{ param.deploy }} == 'true'`) and is checked like it when the pipeline renders.
+
 ## Placeholders
 
 | Placeholder | Allowed in | Becomes |
 |---|---|---|
 | `{{ param.x }}` | action fields, `when` | `{{workflow.parameters.x}}`; quoted in `when` |
-| `{{ values.a.b }}` | action fields, `when`, trigger params, source fields | A Helm expression for `.Values.a.b` |
+| `{{ values.a.b }}` | action fields, `when`, trigger params, source fields | A Helm expression for `.Values.a.b`; quoted in `when` |
 | `{{ setup.<output> }}` | action fields, `when`, source fields, with a `setup` | The setup's output parameter, as a global output; quoted in `when` |
 | `{{ steps.<stage>.<step>.<output> }}` | action fields, `when`, and handlers, in later stages; pipeline handlers | An earlier step's output parameter, as a global output; quoted in `when` |
 | `{{ source.<name>.url }}`, `{{ source.<name>.revision }}`, `{{ source.<name>.sha }}` | the stage's steps and their `when`, and the handlers of the stage and its steps | A stage source's URL, revision as given, and commit |

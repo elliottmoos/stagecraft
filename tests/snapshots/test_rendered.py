@@ -6,6 +6,7 @@ from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 from stagecraft.serialize import serialize
 
 from fixtures.pipelines import (
+    conditions,
     escaping,
     handlers,
     hooks,
@@ -40,6 +41,7 @@ PIPELINES = [
     setup.action_pipeline,
     outputs.pipeline,
     stage_sources.pipeline,
+    conditions.pipeline,
 ]
 
 

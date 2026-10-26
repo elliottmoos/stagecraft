@@ -99,6 +99,7 @@ The pipeline gains params, a `prepare` stage (a stand-in for a real checkout), a
 stage that only runs when asked:
 
 ```python file=pipelines/service_ci.py
+from stagecraft.conditions import param
 from stagecraft.spec import Param, Pipeline, Stage, Step
 
 from actions import Make, Shell
@@ -127,7 +128,7 @@ pipeline = Pipeline(
         Stage(
             "deploy",
             [Step("staging", Make(target="deploy-staging"))],
-            when="{{ param.deploy }} == 'true'",
+            when=param("deploy") == "true",
         ),
     ],
 )
@@ -140,19 +141,33 @@ submits with `push=true`.
 ## Conditions: `when`
 
 A stage or a step with `when` runs only if the condition is true; otherwise it's **skipped**.
+Write conditions with the operands in `stagecraft.conditions`:
 
 ```python
-Stage("deploy", [...], when="{{ param.deploy }} == 'true'")
+from stagecraft.conditions import param
+
+Stage("deploy", [...], when=param("deploy") == "true")
+Stage("deploy", [...], when=(param("deploy") == "true") & ~(param("env") == "prod"))
 ```
 
-- The condition is an [Argo `when` expression](https://argo-workflows.readthedocs.io/en/latest/walk-through/conditionals/):
-  comparisons (`==`, `!=`, `<`, ...), `&&`, `||`, `!`, and parentheses.
-- **Inside `when`, `{{ param.x }}` becomes a quoted string**, so compare it with quoted values:
-  `{{ param.deploy }} == 'true'`. (Argo reads bare words as booleans or numbers, so an unquoted
-  comparison would compare the boolean `true` with the string `'true'` and always be false.)
-- `{{ values.a.b }}` works in `when` too, for conditions set per installation.
+- **Compare** with `==` and `!=`, against a string or another operand. Everything compared is a
+  string, so write `"true"`, not `True`.
+- **Combine** with `&` (and), `|` (or), and `~` (not), with each comparison in parentheses:
+  `&` and `|` bind tighter than `==` in Python. Python's `and` and `or` raise an error.
+- **Operands**: `param("x")`; `value("a.b")` for a Helm value; and, as later chapters introduce
+  them, `source(...)`, `setup(...)`, and `output(...)`. Each is checked when the pipeline renders,
+  like the placeholder it stands for.
 - A skipped stage doesn't stop the pipeline: later stages still run. A skipped step runs no
   handlers (chapter 6) and reports its status as "Skipped" (chapter 9).
+
+### Raw `when` strings
+
+`when` also takes a raw [Argo `when` expression](https://argo-workflows.readthedocs.io/en/latest/walk-through/conditionals/),
+for anything the operands don't cover (`<`, `=~`, Argo's own variables). In a raw string,
+placeholders such as `{{ param.x }}` and `{{ values.a.b }}` become **quoted strings**, so compare
+them with quoted values: `when="{{ param.deploy }} == 'true'"`. Argo reads bare words as booleans
+or numbers, so an unquoted comparison would compare the boolean `true` with the string `'true'`
+and always be false. A typed condition renders to exactly this form.
 
 ## Native Argo expressions
 

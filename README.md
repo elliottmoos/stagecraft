@@ -121,6 +121,7 @@ need a `Step` each.
 ## Pipelines
 
 ```python
+from stagecraft.conditions import param
 from stagecraft.spec import Param, Pipeline, Source, Stage, Step, Trigger
 
 from actions import GitHubStatus, Shell
@@ -149,7 +150,7 @@ pipeline = Pipeline(
         Stage(
             "deploy",
             [Step("staging", Shell(script="make deploy"))],
-            when="{{ param.deploy }} == 'true'",
+            when=param("deploy") == "true",
             status="ci/deploy",
         ),
     ],
@@ -176,8 +177,10 @@ pipeline = Pipeline(
   `Step(..., inputs={"<input>": "<stage>.<step>.<artifact>"})`. Retention (artifact GC, TTL) is
   set once in the controller's `workflowDefaults`.
 - **Params** become the Argo UI's submit form (descriptions, enums, defaults).
-- **`when`** (stage or step) skips it when false. Inside it, `{{ param.x }}` is a quoted
-  string, so compare with quoted values: `"{{ param.deploy }} == 'true'"`.
+- **`when`** (stage or step) skips it when false. Write it with `stagecraft.conditions`:
+  `param("deploy") == "true"`, combined with `&`, `|`, and `~`; operands are `param`, `value`,
+  `source`, `setup`, and `output`. A raw Argo expression works too, where placeholders are quoted
+  strings: `"{{ param.deploy }} == 'true'"`.
 - **Handlers**: `on_success`, `on_failure`, and `finally_` actions run after a stage, a step, or
   (`on_success`/`on_failure` only) the whole pipeline finishes. Handlers can't have their own
   `when`, status, or handlers. A failing pipeline handler fails the pipeline; a

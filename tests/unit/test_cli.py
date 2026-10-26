@@ -45,6 +45,7 @@ def test_render_accepts_a_directory_and_a_chart_name(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert sorted(p.name for p in (tmp_path / "templates").iterdir()) == [
+        "conditions-ci.yaml",
         "escaping.yaml",
         "handlers-ci.yaml",
         "hooks-ci.yaml",
@@ -130,8 +131,8 @@ def test_check_reports_ok_without_writing(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert result.output == (
-        "ok: escaping, handlers-ci, hooks-ci, outputs-ci, setup-ci, setup-action-ci, smoke-ci,"
-        " source-ci, stage-sources-ci, status-ci, triggers-ci\n"
+        "ok: conditions-ci, escaping, handlers-ci, hooks-ci, outputs-ci, setup-ci, setup-action-ci,"
+        " smoke-ci, source-ci, stage-sources-ci, status-ci, triggers-ci\n"
     )
 
 
@@ -156,7 +157,7 @@ def test_graph_needs_a_pipeline_name_when_paths_hold_several():
     result = CliRunner().invoke(app, ["graph", "fixtures/pipelines"])
 
     assert result.exit_code == 1
-    assert "11 pipelines found (escaping, handlers-ci, " in result.output
+    assert "12 pipelines found (conditions-ci, escaping, " in result.output
     assert "choose one with --pipeline" in result.output
 
 

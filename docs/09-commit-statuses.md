@@ -178,6 +178,7 @@ class GitHubStatus(Action):
 The pipeline reports on itself and on the `verify`, `package`, and `deploy` stages:
 
 ```python file=pipelines/service_ci.py
+from stagecraft.conditions import param
 from stagecraft.spec import Param, Pipeline, Source, Stage, Step
 
 from actions import GitHubStatus, Make, Notify
@@ -230,7 +231,7 @@ pipeline = Pipeline(
                     ),
                 )
             ],
-            when="{{ param.deploy }} == 'true'",
+            when=param("deploy") == "true",
             status="ci/deploy",
         ),
     ],

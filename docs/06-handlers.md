@@ -116,6 +116,7 @@ breaking the script (chapter 3).
 The pipeline tells the channel when verification fails, and how every run ends:
 
 ```python file=pipelines/service_ci.py
+from stagecraft.conditions import param
 from stagecraft.spec import Param, Pipeline, Stage, Step
 
 from actions import Make, Notify, Shell
@@ -145,7 +146,7 @@ pipeline = Pipeline(
         Stage(
             "deploy",
             [Step("staging", Make(target="deploy-staging"))],
-            when="{{ param.deploy }} == 'true'",
+            when=param("deploy") == "true",
         ),
     ],
     on_failure=[Notify(message="{{ step.name }} {{ step.outcome }}")],

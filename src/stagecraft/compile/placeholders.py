@@ -49,9 +49,9 @@ def lower(
     has them, "step" in handlers, "status" in the status reporter) to its fields and the Argo
     expressions that provide them.
 
-    `quote_params` is for `when` expressions: params (and scoped fields) are strings, but Argo
-    parses a bare `true` or `42` as a boolean or number (verified on 4.1.6: `true == 'true'` is
-    false). Quoting makes `{{ param.deploy }} == 'true'` compare strings.
+    `quote_params` is for `when` expressions: params (and scoped fields and values) are strings,
+    but Argo parses a bare `true` or `42` as a boolean or number (verified on 4.1.6:
+    `true == 'true'` is false). Quoting makes `{{ param.deploy }} == 'true'` compare strings.
     """
     scopes = scopes or {}
 
@@ -81,7 +81,7 @@ def lower(
             return f"'{value}'" if quote_params else value
         if values is None:
             raise CompileError(f"'{{{{ values.{path} }}}}' needs a compile context")
-        return values(path)
+        return f"'{values(path)}'" if quote_params else values(path)
 
     return _PLACEHOLDER.sub(replace, text)
 

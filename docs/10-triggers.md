@@ -34,6 +34,7 @@ fails otherwise.
 A nightly build of `main` that pushes its image:
 
 ```python file=pipelines/service_ci.py
+from stagecraft.conditions import param
 from stagecraft.spec import Param, Pipeline, Source, Stage, Step, Trigger
 
 from actions import GitHubStatus, Make, Notify
@@ -86,7 +87,7 @@ pipeline = Pipeline(
                     ),
                 )
             ],
-            when="{{ param.deploy }} == 'true'",
+            when=param("deploy") == "true",
             status="ci/deploy",
         ),
     ],

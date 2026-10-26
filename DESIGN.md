@@ -81,7 +81,7 @@ pipeline = Pipeline(
         Stage("package", [BuildImage(push="{{ param.push }}")],
               status="ci/package"),
         Stage("deploy", [DeployStaging()],
-              when="{{ param.deploy }} == 'true'", status="ci/deploy"),
+              when=param("deploy") == "true", status="ci/deploy"),
     ],
     on_success=[Notify(channel="{{ values.notify.channel }}")],
     on_failure=[Notify(channel="{{ values.notify.alertChannel }}", include_failures=True)],
@@ -95,7 +95,7 @@ Rules:
 - Placeholders are lowered to the right expression language:
   - `{{ param.x }}` and `{{ step.name }}` become Argo expressions (workflow parameters, node info); `{{ step.outcome }}` is fixed per handler variant (`succeeded` or `failed`).
   - `{{ values.a.b }}` becomes a Helm expression (`{{ .Values.a.b }}`).
-  - Inside `when`, `{{ param.x }}` becomes a quoted string, so conditions compare strings (`{{ param.deploy }} == 'true'`). Argo parses bare words, so an unquoted `true == 'true'` is false.
+  - `when` takes a typed condition (`param("deploy") == "true"`, section 16) or a raw Argo expression. Inside a raw `when`, placeholders (params, values, and scoped fields) become quoted strings, so conditions compare strings (`{{ param.deploy }} == 'true'`). Argo parses bare words, so an unquoted `true == 'true'` is false. Helm values were not quoted until slice 18 fixed it.
 - Declared `Param`s, including descriptions and enums, become the Argo UI submit form.
 - Pipeline files contain no installation-specific literals. They reference Helm values by path.
 - Steps share no files: each runs in its own pod, starting from its own copy of the source's checkout. Artifacts between steps are section 16.
@@ -220,7 +220,7 @@ stagecraft/
 
 Slices 1 to 10 are recorded as built; their "blocks" became actions placed by steps in slice 12.
 
-Planned after the concept model (section 16, agreed 2026-10-25):
+Built after the concept model (section 16, agreed 2026-10-25):
 
 11. Remove the shared workspace: `Workspace`, `containerset`, the per-run claim, and workspace access flags.
 12. Actions and steps: composition replaces `Block` inheritance; Stagecraft's outcome vocabulary for handlers.
@@ -267,6 +267,7 @@ Left out on purpose, as of slice 10 (2026-10-24; updated for section 16 on 2026-
 | Opting a step out of source injection | Every step downloads the sources; cheap from an in-cluster repository | Source download time matters for steps that don't need them |
 | SSH keys and other credential kinds for sources | HTTPS with a username and token covers GitHub | A source host needs SSH, or GitHub App tokens must be minted per run |
 | Deeper source checkouts (history for `git describe`, changed-file detection) | The checkout is one commit deep, which is all builds and tests need | A step needs history or tags |
+| An earlier stage's outcome as a condition operand (`when=stage("verify").failed`) | Steps already react to outcomes through handlers | A stage must run only after an earlier one failed or was skipped |
 | Caches that outlive a run (for example a Go module cache) | A different concept: shared across runs, not handed between steps | Build times need them |
 | Multi-line scripts containing a string value as readable literal blocks (section 8) | Kept as double-quoted one-liners: correct for any value, but harder to read in diffs | Rendered templates are reviewed often enough for this to hurt |
 
@@ -275,7 +276,7 @@ Accepted gaps (Argo or Helm behavior, not missing features) are kept with the me
 
 ## 16. Concept model and contracts
 
-Agreed 2026-10-25. This is the model slices 11 to 18 build toward (section 11); slices 11 to 17 are built. Where it conflicts with sections 5 to 8, those sections describe the current code and this section wins for new work. Points marked **open** are settled in the slice that builds them.
+Agreed 2026-10-25. This is the model slices 11 to 18 build toward (section 11); slices 11 to 18 are built. Where it conflicts with sections 5 to 8, those sections describe the current code and this section wins for new work. Points marked **open** are settled in the slice that builds them.
 
 ### Personas
 
@@ -373,7 +374,7 @@ Stagecraft's outcomes are `succeeded`, `failed`, and `skipped`, mapped from Argo
 
 ### Conditions
 
-A typed condition API replaces raw `when` strings in pipeline files, for example `when=param("deploy") == "true"`. It removes the quoting trap (section 5) and is checked at render time. It covers only comparisons over Stagecraft concepts that map cleanly onto Argo `when` expressions. Params come first; other operands (such as a source's revision or an earlier stage's outcome) are added when a pipeline needs them.
+Built in slice 18. `stagecraft.conditions` gives typed conditions for `when`: operands `param(name)`, `value(path)`, `source(field)` (including `<name>.<field>` for stage sources), `setup(output)`, and `output("<stage>.<step>.<output>")`, compared with `==` or `!=` to a string literal or another operand, and combined with `&`, `|`, and `~`. A condition renders to the raw placeholder form (`{{ param.deploy }} == 'true'`, combinations parenthesized: `(a) && (!(b))`), which `when` stores, so it is lowered, quoted, and checked exactly like a hand-written one; no new lowering. Literals are strings without single quotes; Python's `and`/`or` and the precedence slip `a == 'x' & b` raise `TypeError`s explaining the fix. Raw `when` strings remain the escape valve for what the operands don't cover (`<`, `=~`, Argo variables). Stage outcomes as operands are not built: added when a pipeline needs them (section 15). Verified on kind: `&&`, `||`, `!`, nested parentheses, and quoted Helm values evaluate as written.
 
 ### Escape valves
 

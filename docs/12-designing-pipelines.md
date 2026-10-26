@@ -211,6 +211,8 @@ a value needs quotes. Common render messages:
 | Message (abridged) | Cause | Fix |
 |---|---|---|
 | `undeclared param 'sha'` | `{{ param.sha }}` with no `Param("sha")` | Declare the param |
+| `use & and \| to combine conditions` / `combine comparisons in parentheses` | `and`/`or` between conditions, or `a == 'x' & b == 'y'` | `(a == 'x') & (b == 'y')` |
+| `compare with a string` | `param('deploy') == True` | Compare with `'true'`: everything compared is a string |
 | `'{{ step.name }}' is only available in handlers` | `{{ step.* }}` outside a handler | Move it into an `on_*`/`finally_` handler |
 | `value 'build.retries' is used as str here but as int elsewhere` | Two references give one path different types | Use one type everywhere (placeholders are strings) |
 | `paths must be dotted identifiers` | A key like `alert-channel` | Rename the key (`alertChannel`) |
